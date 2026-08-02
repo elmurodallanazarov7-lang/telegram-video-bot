@@ -123,10 +123,11 @@ function getCookiesPath() {
 }
 
 // Tezlik uchun umumiy flaglar:
-// -4            IPv6 timeoutlarining oldini olish (cloud hostinglarda odatiy sabab)
-// -N 4          fragmentlarni (DASH) parallel yuklash
-// --no-update   avtomatik versiya tekshiruvini o'chirish
-const SPEED_FLAGS = '-4 -N 8 --no-update';
+// -4                    IPv6 timeoutlarining oldini olish (cloud hostinglarda odatiy sabab)
+// -N 8                  fragmentlarni (DASH) parallel yuklash
+// --no-update           avtomatik versiya tekshiruvini o'chirish
+// --external-downloader aria2c -- aria2c orqali bir nechta ulanish bilan yuklash (Dockerfile'da o'rnatilgan)
+const SPEED_FLAGS = '-4 -N 8 --no-update --external-downloader aria2c --external-downloader-args "-x 16 -s 16 -k 1M"';
 
 function buildYtDlpFlags(platform) {
   const cookiesPath = getCookiesPath();
