@@ -149,7 +149,9 @@ function prepareCookies() {
   }
 }
 
-function ytArgs(url) {
+const YT_CLIENTS = ["android,web", "tv_embedded", "ios", "web"];
+
+function ytArgs(url, clientOverride) {
   const args = [
     "--no-warnings",
     "--no-playlist",
@@ -160,25 +162,25 @@ function ytArgs(url) {
   ];
   if (runtimeCookiesPath) args.push("--cookies", runtimeCookiesPath);
   if (detectPlatform(url) === "YouTube") {
-    // web_safari yolg'iz holda ba'zi videolarda hech qanday format
-    // qaytarmasligi mumkin ("Requested format is not available").
-    // android,web kombinatsiyasi formatlar ro'yxatini kengaytiradi.
-    args.push("--extractor-args", "youtube:player_client=android,web");
+    args.push("--extractor-args", `youtube:player_client=${clientOverride || YT_CLIENTS[0]}`);
   }
   return args;
 }
 
 async function mediaInfo(url) {
-  try {
-    const { stdout } = await run("yt-dlp", [
-      ...ytArgs(url), "--dump-single-json", "--skip-download", url,
-    ], 30000);
-    const data = JSON.parse(stdout);
-    return { title: cleanTitle(data.title), thumbnail: data.thumbnail };
-  } catch (error) {
-    console.warn("Media info olinmadi:", error.message);
-    return null;
+  const clients = detectPlatform(url) === "YouTube" ? YT_CLIENTS : [null];
+  for (const client of clients) {
+    try {
+      const { stdout } = await run("yt-dlp", [
+        ...ytArgs(url, client), "--dump-single-json", "--skip-download", url,
+      ], 30000);
+      const data = JSON.parse(stdout);
+      return { title: cleanTitle(data.title), thumbnail: data.thumbnail };
+    } catch (error) {
+      console.warn(`Media info olinmadi (client=${client || "default"}):`, error.message);
+    }
   }
+  return null;
 }
 
 async function findFile(prefix) {
@@ -197,31 +199,43 @@ async function findFile(prefix) {
 async function download(url, kind, height) {
   const prefix = `media-${crypto.randomBytes(8).toString("hex")}`;
   const output = path.join(DOWNLOAD_DIR, `${prefix}.%(ext)s`);
-  const base = [...ytArgs(url), "-o", output];
+  const clients = detectPlatform(url) === "YouTube" ? YT_CLIENTS : [null];
 
-  if (kind === "audio") {
-    await run("yt-dlp", [
-      ...base,
-      "-f", "bestaudio/best",
-      "-x", "--audio-format", "mp3", "--audio-quality", "128K",
-      url,
-    ], 180000);
-  } else {
-    const quality = Math.max(144, Math.min(Number(height) || 720, 1080));
-    const format = `bestvideo[height<=${quality}]+bestaudio/best[height<=${quality}]/best`;
+  let lastError = null;
+  for (const client of clients) {
+    const base = [...ytArgs(url, client), "-o", output];
     try {
-      await run("yt-dlp", [
-        ...base, "-f", format, "--merge-output-format", "mp4",
-        "--max-filesize", "49M", url,
-      ], 180000);
-    } catch (firstError) {
-      console.warn("Video format fallback:", firstError.message);
-      await run("yt-dlp", [
-        ...base, "-f", "best", "--merge-output-format", "mp4",
-        "--max-filesize", "49M", url,
-      ], 180000);
+      if (kind === "audio") {
+        await run("yt-dlp", [
+          ...base,
+          "-f", "bestaudio/best",
+          "-x", "--audio-format", "mp3", "--audio-quality", "128K",
+          url,
+        ], 180000);
+      } else {
+        const quality = Math.max(144, Math.min(Number(height) || 720, 1080));
+        const format = `bestvideo[height<=${quality}]+bestaudio/best[height<=${quality}]/best`;
+        try {
+          await run("yt-dlp", [
+            ...base, "-f", format, "--merge-output-format", "mp4",
+            "--max-filesize", "49M", url,
+          ], 180000);
+        } catch (firstError) {
+          console.warn(`Video format fallback (client=${client || "default"}):`, firstError.message);
+          await run("yt-dlp", [
+            ...base, "-f", "best/b", "--merge-output-format", "mp4",
+            "--max-filesize", "49M", url,
+          ], 180000);
+        }
+      }
+      lastError = null;
+      break;
+    } catch (error) {
+      lastError = error;
+      console.warn(`Yuklash urinishi muvaffaqiyatsiz (client=${client || "default"}):`, error.message);
     }
   }
+  if (lastError) throw lastError;
 
   const filePath = await findFile(prefix);
   if (!filePath) throw new Error("Fayl yaratilmagan");
