@@ -88,6 +88,25 @@ Deploy tugagach, loglarda `🤖 Bot ishga tushdi...` yozuvini ko'rasiz — bot i
 - **Free tarif uyquga ketadi**: agar bepul Web Service ishlatsangiz, 15 daqiqa faolsizlikdan keyin server "uxlab qoladi" va Telegram polling to'xtaydi. Doimiy ishlashi uchun pullik tarif yoki Background Worker kerak.
 - **Disk vaqtinchalik**: Render'dagi fayl tizimi doimiy emas (har deploy'da tozalanadi), lekin bu muammo emas — bot video/audio faylni yuklab, yuborib, so'ng darhol o'chirib tashlaydi.
 
+## "Sign in to confirm you're not a bot" xatosi chiqsa
+
+Bu YouTube (ba'zan Instagram) ning server IP-manzillaridan kelayotgan so'rovlarni bloklashi. Buni **cookies.txt** yordamida hal qilamiz — bu YouTube hisobingizning login ma'lumotlarini o'z ichiga oladi, shuning uchun uni **hech qachon GitHub'ga (ayniqsa Public repo'ga) yuklamang**. Render'ning "Secret Files" funksiyasidan foydalanamiz — bu fayl faqat serverga yuklanadi, kodga qo'shilmaydi.
+
+### 1-qadam: cookies.txt faylini olish
+1. Brauzeringizga **"Get cookies.txt LOCALLY"** kengaytmasini o'rnating (Chrome yoki Firefox uchun bor)
+2. YouTube'ga (asosiy shaxsiy hisobingiz emas, zaxira/ikkinchi hisob tavsiya etiladi — bloklanish xavfi bo'lishi mumkin) kiring
+3. youtube.com sahifasida turib, kengaytma orqali cookies'ni **cookies.txt** formatida eksport qiling
+
+### 2-qadam: Render'ga qo'shish
+1. Render dashboard'da o'z service'ingizni oching
+2. **Environment** bo'limiga o'ting
+3. **"Secret Files"** qismini toping → **"Add Secret File"**
+4. **Filename**: `cookies.txt`
+5. **Contents**: eksport qilingan faylning butun matnini joylashtiring
+6. Saqlang — Render avtomatik ravishda qayta deploy qiladi
+
+Bot kodida bu fayl avtomatik ravishda `/etc/secrets/cookies.txt` manzilidan topiladi va ishlatiladi.
+
 ## Eslatma
 
 - Telegram bot orqali fayl yuborish limiti — **50MB**. Undan katta videolar yuborilmasligi mumkin.
