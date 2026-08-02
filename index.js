@@ -29,6 +29,25 @@ if (process.env.PORT) {
 const DOWNLOAD_DIR = path.join(__dirname, 'downloads');
 if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR);
 
+// --- Audio kesh: YouTube video ID -> Telegram file_id -------------------
+// Bir marta yuklangan qo'shiq ikkinchi so'ralganda qayta yuklanmaydi,
+// Telegramning o'z serveridagi faylga file_id orqali darhol havola qilinadi.
+const CACHE_FILE = path.join(DOWNLOAD_DIR, 'audio_cache.json');
+let AUDIO_CACHE = {};
+try {
+  AUDIO_CACHE = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
+} catch (e) {
+  AUDIO_CACHE = {};
+}
+let cacheSaveTimer = null;
+function saveAudioCache() {
+  // Debounce qilib yozamiz — ketma-ket yuklashlarda diskga ortiqcha yozmaslik uchun
+  clearTimeout(cacheSaveTimer);
+  cacheSaveTimer = setTimeout(() => {
+    fs.writeFile(CACHE_FILE, JSON.stringify(AUDIO_CACHE), () => {});
+  }, 500);
+}
+
 // Havolani matndan topish uchun regex
 const URL_REGEX = /(https?:\/\/[^\s]+)/i;
 
@@ -107,7 +126,7 @@ function getCookiesPath() {
 // -4            IPv6 timeoutlarining oldini olish (cloud hostinglarda odatiy sabab)
 // -N 4          fragmentlarni (DASH) parallel yuklash
 // --no-update   avtomatik versiya tekshiruvini o'chirish
-const SPEED_FLAGS = '-4 -N 4 --no-update';
+const SPEED_FLAGS = '-4 -N 8 --no-update';
 
 function buildYtDlpFlags(platform) {
   const cookiesPath = getCookiesPath();
@@ -232,6 +251,22 @@ bot.on('callback_query', async (query) => {
     return;
   }
 
+  // Kesh bo'lsa — qayta yuklamasdan, Telegram'ning o'zidagi faylni darhol jo'natamiz
+  const cachedFileId = AUDIO_CACHE[chosen.id];
+  if (cachedFileId) {
+    bot.answerCallbackQuery(query.id, { text: `✅ ${chosen.title}` }).catch(() => {});
+    const statusMsg = await bot.sendMessage(chatId, `📤 "${chosen.title}" yuborilmoqda...`);
+    try {
+      await bot.sendAudio(chatId, cachedFileId);
+      await bot.deleteMessage(chatId, statusMsg.message_id).catch(() => {});
+      return;
+    } catch (e) {
+      // file_id eskirgan/yaroqsiz bo'lsa, keshdan o'chirib qayta yuklaymiz
+      delete AUDIO_CACHE[chosen.id];
+      saveAudioCache();
+    }
+  }
+
   bot.answerCallbackQuery(query.id, { text: `⏳ ${chosen.title} yuklanmoqda...` }).catch(() => {});
 
   const statusMsg = await bot.sendMessage(chatId, `⏳ "${chosen.title}" yuklanmoqda...`);
@@ -240,12 +275,16 @@ bot.on('callback_query', async (query) => {
   const fileId = crypto.randomBytes(6).toString('hex');
   const outputTemplate = path.join(DOWNLOAD_DIR, `${fileId}.%(ext)s`);
   const flags = buildYtDlpFlags('YouTube');
-  const cmd = `yt-dlp ${flags} -x --audio-format mp3 -o "${outputTemplate}" "${url}"`;
+  // MUHIM: -x --audio-format mp3 OLIB TASHLANDI — bu ffmpeg orqali qayta kodlashni
+  // talab qilib, eng sekin qadam edi. Buning o'rniga eng yaxshi audio formatni
+  // (odatda m4a/opus) TO'G'RIDAN-TO'G'RI yuklaymiz, konvertatsiyasiz.
+  // Telegram bu formatlarni sendAudio orqali muammosiz qabul qiladi.
+  const cmd = `yt-dlp ${flags} -f "bestaudio/best" -o "${outputTemplate}" "${url}"`;
 
-  runAndSend(cmd, chatId, statusMsg.message_id, fileId, true, `❌ "${chosen.title}" yuklab bo'lmadi.`);
+  runAndSend(cmd, chatId, statusMsg.message_id, fileId, true, `❌ "${chosen.title}" yuklab bo'lmadi.`, chosen.id, chosen.title);
 });
 
-function runAndSend(cmd, chatId, statusMessageId, fileId, audioOnly, errorText) {
+function runAndSend(cmd, chatId, statusMessageId, fileId, audioOnly, errorText, cacheKey, cacheTitle) {
   exec(cmd, { maxBuffer: 1024 * 1024 * 50 }, async (error, stdout, stderr) => {
     if (error) {
       console.error(stderr);
@@ -266,7 +305,12 @@ function runAndSend(cmd, chatId, statusMessageId, fileId, audioOnly, errorText) 
 
     try {
       if (audioOnly) {
-        await bot.sendAudio(chatId, filePath);
+        const sent = await bot.sendAudio(chatId, filePath, cacheTitle ? { title: cacheTitle } : {});
+        // Keyingi safar shu qo'shiq so'ralganda qayta yuklamasdan darhol jo'natish uchun saqlaymiz
+        if (cacheKey && sent && sent.audio && sent.audio.file_id) {
+          AUDIO_CACHE[cacheKey] = sent.audio.file_id;
+          saveAudioCache();
+        }
       } else {
         await bot.sendVideo(chatId, filePath, {}, { filename: files[0], contentType: 'video/mp4' });
       }
