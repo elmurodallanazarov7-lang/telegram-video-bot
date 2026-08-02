@@ -14,6 +14,7 @@ const PORT = Number(process.env.PORT || 10000);
 const DOWNLOAD_DIR = path.resolve(process.env.DOWNLOAD_DIR || "./downloads");
 const MAX_FILE_BYTES = 49 * 1024 * 1024;
 const CACHE_TTL = 30 * 60 * 1000;
+let runtimeCookiesPath = null;
 
 if (!TOKEN) {
   console.error("BOT_TOKEN topilmadi. Render Environment Variables ga BOT_TOKEN qo‘shing.");
@@ -131,6 +132,23 @@ function run(command, args, timeout) {
   });
 }
 
+function prepareCookies() {
+  const source = process.env.YT_DLP_COOKIES_FILE || "/etc/secrets/cookies.txt";
+  if (!fs.existsSync(source)) return;
+
+  const target = path.join("/tmp", `yt-dlp-cookies-${process.pid}.txt`);
+  try {
+    // Render Secret Files are read-only. yt-dlp may refresh cookie expiry data,
+    // so always give it a writable copy instead of the mounted secret itself.
+    fs.copyFileSync(source, target);
+    fs.chmodSync(target, 0o600);
+    runtimeCookiesPath = target;
+    console.log("Cookies fayli yoziladigan vaqtinchalik nusxaga tayyorlandi.");
+  } catch (error) {
+    console.warn("Cookies fayli nusxalanmadi:", error.message);
+  }
+}
+
 function ytArgs(url) {
   const args = [
     "--no-warnings",
@@ -140,8 +158,7 @@ function ytArgs(url) {
     "--fragment-retries", "2",
     "--concurrent-fragments", "4",
   ];
-  const cookies = process.env.YT_DLP_COOKIES_FILE || "/etc/secrets/cookies.txt";
-  if (fs.existsSync(cookies)) args.push("--cookies", cookies);
+  if (runtimeCookiesPath) args.push("--cookies", runtimeCookiesPath);
   if (detectPlatform(url) === "YouTube") {
     // Do not force android: it often exposes image-only formats and causes
     // "Requested format is not available".
@@ -440,6 +457,7 @@ async function poll() {
 
 async function start() {
   await fsp.mkdir(DOWNLOAD_DIR, { recursive: true });
+  prepareCookies();
   try {
     await execFileAsync("yt-dlp", ["--version"]);
     await execFileAsync("ffmpeg", ["-version"]);
