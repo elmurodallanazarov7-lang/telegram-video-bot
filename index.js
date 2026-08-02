@@ -152,10 +152,10 @@ async function handleMusicSearch(chatId, query) {
 
   const statusMsg = await bot.sendMessage(chatId, `🔎 "${query}" qidirilmoqda...`);
 
-  const flags = buildYtDlpFlags('YouTube');
   const safeQuery = query.replace(/"/g, '');
-  // --flat-playlist — hech narsa yuklamasdan, faqat ro'yxatni tez oladi
-  const cmd = `yt-dlp ${flags} --flat-playlist --print "%(id)s|||%(title)s" "ytsearch10:${safeQuery}"`;
+  // Qidiruv bosqichida cookies/extractor-args shart emas — bu bosqichni tezlashtiradi.
+  // --skip-download va qisqa timeout bilan faqat ro'yxatni tez olamiz.
+  const cmd = `yt-dlp --flat-playlist --skip-download --socket-timeout 10 --print "%(id)s|||%(title)s" "ytsearch10:${safeQuery}"`;
 
   exec(cmd, { maxBuffer: 1024 * 1024 * 20 }, async (error, stdout) => {
     if (error || !stdout.trim()) {
