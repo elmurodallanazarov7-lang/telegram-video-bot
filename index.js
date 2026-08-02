@@ -95,10 +95,17 @@ async function handleDownload(chatId, url, audioOnly) {
   const fileId = crypto.randomBytes(6).toString('hex');
   const outputTemplate = path.join(DOWNLOAD_DIR, `${fileId}.%(ext)s`);
 
-  // yt-dlp orqali yuklab olish (tizimda o'rnatilgan bo'lishi kerak)
+  // Render'da "Secret Files" orqali yuklangan cookies.txt bo'lsa, undan foydalanamiz
+  // (YouTube/Instagram'ning "Sign in to confirm you're not a bot" himoyasini chetlab o'tish uchun)
+  const cookiesPath = fs.existsSync('/etc/secrets/cookies.txt') ? '/etc/secrets/cookies.txt' : null;
+  const cookiesArg = cookiesPath ? `--cookies "${cookiesPath}"` : '';
+
+  // YouTube uchun android client orqali so'rov yuborish ko'pincha bot-tekshiruvini chetlab o'tishga yordam beradi
+  const extractorArgs = platform === 'YouTube' ? `--extractor-args "youtube:player_client=android,web"` : '';
+
   const cmd = audioOnly
-    ? `yt-dlp -x --audio-format mp3 -o "${outputTemplate}" "${url}"`
-    : `yt-dlp -f "mp4/best" -o "${outputTemplate}" "${url}"`;
+    ? `yt-dlp ${cookiesArg} ${extractorArgs} -x --audio-format mp3 -o "${outputTemplate}" "${url}"`
+    : `yt-dlp ${cookiesArg} ${extractorArgs} -f "mp4/best" -o "${outputTemplate}" "${url}"`;
 
   exec(cmd, { maxBuffer: 1024 * 1024 * 50 }, async (error, stdout, stderr) => {
     if (error) {
