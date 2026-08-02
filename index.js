@@ -136,22 +136,108 @@ async function handleDownload(chatId, url, audioOnly) {
   runAndSend(cmd, chatId, statusMsg.message_id, fileId, true, `❌ Yuklab bo'lmadi. Havola noto'g'ri yoki video mavjud emas bo'lishi mumkin.`);
 }
 
-// Qo'shiq nomi bo'yicha YouTube'dan qidirib, mp3 qilib yuborish
+// Qidiruv natijalarini vaqtincha saqlash (tugma bosilganda foydalanish uchun)
+const SEARCH_CACHE = new Map(); // searchId -> [{id, title}, ...]
+setInterval(() => {
+  const THIRTY_MIN = 30 * 60 * 1000;
+  const now = Date.now();
+  for (const [key, val] of SEARCH_CACHE) {
+    if (now - val.timestamp > THIRTY_MIN) SEARCH_CACHE.delete(key);
+  }
+}, 10 * 60 * 1000);
+
+// Qo'shiq nomi bo'yicha YouTube'dan 10 ta natija topib, tugmalar bilan ko'rsatish
 async function handleMusicSearch(chatId, query) {
   if (!query || query.length < 2) return;
 
   const statusMsg = await bot.sendMessage(chatId, `🔎 "${query}" qidirilmoqda...`);
 
+  const flags = buildYtDlpFlags('YouTube');
+  const safeQuery = query.replace(/"/g, '');
+  // --flat-playlist — hech narsa yuklamasdan, faqat ro'yxatni tez oladi
+  const cmd = `yt-dlp ${flags} --flat-playlist --print "%(id)s|||%(title)s" "ytsearch10:${safeQuery}"`;
+
+  exec(cmd, { maxBuffer: 1024 * 1024 * 20 }, async (error, stdout) => {
+    if (error || !stdout.trim()) {
+      bot.editMessageText(`❌ "${query}" bo'yicha hech narsa topilmadi.`, {
+        chat_id: chatId,
+        message_id: statusMsg.message_id
+      }).catch(() => {});
+      return;
+    }
+
+    const results = stdout.trim().split('\n').map(line => {
+      const [id, ...titleParts] = line.split('|||');
+      return { id: id.trim(), title: titleParts.join('|||').trim() || 'Nomsiz' };
+    }).filter(r => r.id);
+
+    if (results.length === 0) {
+      bot.editMessageText(`❌ "${query}" bo'yicha hech narsa topilmadi.`, {
+        chat_id: chatId,
+        message_id: statusMsg.message_id
+      }).catch(() => {});
+      return;
+    }
+
+    const searchId = crypto.randomBytes(4).toString('hex');
+    SEARCH_CACHE.set(searchId, { results, timestamp: Date.now() });
+
+    const listText = `🔎 *"${query}"* bo'yicha natijalar:\n\n` +
+      results.map((r, i) => `${i + 1}. ${r.title}`).join('\n');
+
+    // Tugmalarni 5 tadan qatorlarga bo'lib joylashtirish
+    const buttons = results.map((r, i) => ({
+      text: `🎵 ${i + 1}`,
+      callback_data: `pick:${searchId}:${i}`
+    }));
+    const keyboard = [];
+    for (let i = 0; i < buttons.length; i += 5) {
+      keyboard.push(buttons.slice(i, i + 5));
+    }
+
+    bot.editMessageText(listText, {
+      chat_id: chatId,
+      message_id: statusMsg.message_id,
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: keyboard }
+    }).catch(() => {});
+  });
+}
+
+// Tugma bosilganda — tanlangan qo'shiqni yuklab yuborish
+bot.on('callback_query', async (query) => {
+  const chatId = query.message.chat.id;
+  const data = query.data || '';
+
+  if (!data.startsWith('pick:')) return;
+
+  const [, searchId, indexStr] = data.split(':');
+  const cached = SEARCH_CACHE.get(searchId);
+
+  if (!cached) {
+    bot.answerCallbackQuery(query.id, { text: '⏱ Bu qidiruv muddati tugagan, qayta qidiring.', show_alert: true }).catch(() => {});
+    return;
+  }
+
+  const index = parseInt(indexStr, 10);
+  const chosen = cached.results[index];
+  if (!chosen) {
+    bot.answerCallbackQuery(query.id, { text: '❌ Topilmadi.', show_alert: true }).catch(() => {});
+    return;
+  }
+
+  bot.answerCallbackQuery(query.id, { text: `⏳ ${chosen.title} yuklanmoqda...` }).catch(() => {});
+
+  const statusMsg = await bot.sendMessage(chatId, `⏳ "${chosen.title}" yuklanmoqda...`);
+
+  const url = `https://www.youtube.com/watch?v=${chosen.id}`;
   const fileId = crypto.randomBytes(6).toString('hex');
   const outputTemplate = path.join(DOWNLOAD_DIR, `${fileId}.%(ext)s`);
   const flags = buildYtDlpFlags('YouTube');
+  const cmd = `yt-dlp ${flags} -x --audio-format mp3 -o "${outputTemplate}" "${url}"`;
 
-  // ytsearch1: — YouTube'dan eng mos 1 ta natijani topib, mp3 qilib yuklaydi
-  const safeQuery = query.replace(/"/g, '');
-  const cmd = `yt-dlp ${flags} -x --audio-format mp3 -o "${outputTemplate}" "ytsearch1:${safeQuery}"`;
-
-  runAndSend(cmd, chatId, statusMsg.message_id, fileId, true, `❌ "${query}" bo'yicha hech narsa topilmadi.`);
-}
+  runAndSend(cmd, chatId, statusMsg.message_id, fileId, true, `❌ "${chosen.title}" yuklab bo'lmadi.`);
+});
 
 function runAndSend(cmd, chatId, statusMessageId, fileId, audioOnly, errorText) {
   exec(cmd, { maxBuffer: 1024 * 1024 * 50 }, async (error, stdout, stderr) => {
