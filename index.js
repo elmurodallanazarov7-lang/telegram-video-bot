@@ -134,7 +134,6 @@ function run(command, args, timeout) {
 function ytArgs(url) {
   const args = [
     "--no-warnings",
-    "--no-update",
     "--no-playlist",
     "--socket-timeout", "20",
     "--retries", "2",
