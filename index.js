@@ -160,9 +160,10 @@ function ytArgs(url) {
   ];
   if (runtimeCookiesPath) args.push("--cookies", runtimeCookiesPath);
   if (detectPlatform(url) === "YouTube") {
-    // Do not force android: it often exposes image-only formats and causes
-    // "Requested format is not available".
-    args.push("--extractor-args", "youtube:player_client=web_safari");
+    // web_safari yolg'iz holda ba'zi videolarda hech qanday format
+    // qaytarmasligi mumkin ("Requested format is not available").
+    // android,web kombinatsiyasi formatlar ro'yxatini kengaytiradi.
+    args.push("--extractor-args", "youtube:player_client=android,web");
   }
   return args;
 }
