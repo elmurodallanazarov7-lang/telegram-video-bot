@@ -45,10 +45,12 @@ bot.onText(/^\/start/, (msg) => {
     "Salom! 👋\n\n" +
     "Men Instagram, TikTok va YouTube'dan video va musiqa yuklab beraman.\n\n" +
     "📥 *Video yuklash:* shunchaki havolani yuboring\n" +
-    "🎵 *Faqat musiqa (mp3) kerak bo'lsa:* havola oldiga /mp3 yozing\n\n" +
+    "🎵 *Faqat musiqa (mp3) kerak bo'lsa:* havola oldiga /mp3 yozing\n" +
+    "🔎 *Qo'shiq nomi bilan qidirish:* shunchaki qo'shiq/ijrochi nomini yozing\n\n" +
     "Masalan:\n" +
     "`https://www.tiktok.com/@user/video/123456`\n" +
-    "`/mp3 https://youtu.be/dQw4w9WgXcQ`",
+    "`/mp3 https://youtu.be/dQw4w9WgXcQ`\n" +
+    "`Ummon guruhi - Sensiz`",
     { parse_mode: 'Markdown' }
   );
 });
@@ -58,8 +60,9 @@ bot.onText(/^\/help/, (msg) => {
     "🤖 Buyruqlar:\n" +
     "/start - Botni ishga tushirish\n" +
     "/help - Yordam\n\n" +
-    "Video yuklash uchun shunchaki linkni yuboring.\n" +
-    "Faqat audio/musiqa kerak bo'lsa, link oldiga /mp3 qo'shing."
+    "📥 Video yuklash uchun shunchaki linkni yuboring.\n" +
+    "🎵 Faqat audio/musiqa kerak bo'lsa, link oldiga /mp3 qo'shing.\n" +
+    "🔎 Havola o'rniga qo'shiq nomini yozsangiz, bot uni o'zi qidirib topib, mp3 qilib yuboradi."
   );
 });
 
@@ -70,7 +73,7 @@ bot.onText(/^\/mp3\s+(.+)/i, async (msg, match) => {
   await handleDownload(chatId, url, true);
 });
 
-// Oddiy xabar — ichida link bo'lsa video sifatida yuklaydi
+// Oddiy xabar — link bo'lsa yuklab beradi, aks holda qo'shiq nomi sifatida qidiradi
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text || '';
@@ -78,10 +81,24 @@ bot.on('message', async (msg) => {
   if (text.startsWith('/')) return; // buyruqlar yuqorida alohida ishlanadi
 
   const match = text.match(URL_REGEX);
-  if (!match) return;
-
-  await handleDownload(chatId, match[1], false);
+  if (match) {
+    await handleDownload(chatId, match[1], false);
+  } else {
+    await handleMusicSearch(chatId, text.trim());
+  }
 });
+
+function buildYtDlpFlags(platform) {
+  // Render'da "Secret Files" orqali yuklangan cookies.txt bo'lsa, undan foydalanamiz
+  // (YouTube/Instagram'ning "Sign in to confirm you're not a bot" himoyasini chetlab o'tish uchun)
+  const cookiesPath = fs.existsSync('/etc/secrets/cookies.txt') ? '/etc/secrets/cookies.txt' : null;
+  const cookiesArg = cookiesPath ? `--cookies "${cookiesPath}"` : '';
+
+  // YouTube uchun android client orqali so'rov yuborish ko'pincha bot-tekshiruvini chetlab o'tishga yordam beradi
+  const extractorArgs = platform === 'YouTube' ? `--extractor-args "youtube:player_client=android,web"` : '';
+
+  return `${cookiesArg} ${extractorArgs}`;
+}
 
 async function handleDownload(chatId, url, audioOnly) {
   const platform = detectPlatform(url);
@@ -94,32 +111,46 @@ async function handleDownload(chatId, url, audioOnly) {
 
   const fileId = crypto.randomBytes(6).toString('hex');
   const outputTemplate = path.join(DOWNLOAD_DIR, `${fileId}.%(ext)s`);
-
-  // Render'da "Secret Files" orqali yuklangan cookies.txt bo'lsa, undan foydalanamiz
-  // (YouTube/Instagram'ning "Sign in to confirm you're not a bot" himoyasini chetlab o'tish uchun)
-  const cookiesPath = fs.existsSync('/etc/secrets/cookies.txt') ? '/etc/secrets/cookies.txt' : null;
-  const cookiesArg = cookiesPath ? `--cookies "${cookiesPath}"` : '';
-
-  // YouTube uchun android client orqali so'rov yuborish ko'pincha bot-tekshiruvini chetlab o'tishga yordam beradi
-  const extractorArgs = platform === 'YouTube' ? `--extractor-args "youtube:player_client=android,web"` : '';
+  const flags = buildYtDlpFlags(platform);
 
   const cmd = audioOnly
-    ? `yt-dlp ${cookiesArg} ${extractorArgs} -x --audio-format mp3 -o "${outputTemplate}" "${url}"`
-    : `yt-dlp ${cookiesArg} ${extractorArgs} -f "mp4/best" -o "${outputTemplate}" "${url}"`;
+    ? `yt-dlp ${flags} -x --audio-format mp3 -o "${outputTemplate}" "${url}"`
+    : `yt-dlp ${flags} -f "mp4/best" -o "${outputTemplate}" "${url}"`;
 
+  runAndSend(cmd, chatId, statusMsg.message_id, fileId, true, `❌ Yuklab bo'lmadi. Havola noto'g'ri yoki video mavjud emas bo'lishi mumkin.`);
+}
+
+// Qo'shiq nomi bo'yicha YouTube'dan qidirib, mp3 qilib yuborish
+async function handleMusicSearch(chatId, query) {
+  if (!query || query.length < 2) return;
+
+  const statusMsg = await bot.sendMessage(chatId, `🔎 "${query}" qidirilmoqda...`);
+
+  const fileId = crypto.randomBytes(6).toString('hex');
+  const outputTemplate = path.join(DOWNLOAD_DIR, `${fileId}.%(ext)s`);
+  const flags = buildYtDlpFlags('YouTube');
+
+  // ytsearch1: — YouTube'dan eng mos 1 ta natijani topib, mp3 qilib yuklaydi
+  const safeQuery = query.replace(/"/g, '');
+  const cmd = `yt-dlp ${flags} -x --audio-format mp3 -o "${outputTemplate}" "ytsearch1:${safeQuery}"`;
+
+  runAndSend(cmd, chatId, statusMsg.message_id, fileId, true, `❌ "${query}" bo'yicha hech narsa topilmadi.`);
+}
+
+function runAndSend(cmd, chatId, statusMessageId, fileId, audioOnly, errorText) {
   exec(cmd, { maxBuffer: 1024 * 1024 * 50 }, async (error, stdout, stderr) => {
     if (error) {
       console.error(stderr);
-      bot.editMessageText("❌ Yuklab bo'lmadi. Havola noto'g'ri yoki video mavjud emas bo'lishi mumkin.", {
+      bot.editMessageText(errorText, {
         chat_id: chatId,
-        message_id: statusMsg.message_id
+        message_id: statusMessageId
       }).catch(() => {});
       return;
     }
 
     const files = fs.readdirSync(DOWNLOAD_DIR).filter(f => f.startsWith(fileId));
     if (files.length === 0) {
-      bot.editMessageText("❌ Fayl topilmadi.", { chat_id: chatId, message_id: statusMsg.message_id }).catch(() => {});
+      bot.editMessageText("❌ Fayl topilmadi.", { chat_id: chatId, message_id: statusMessageId }).catch(() => {});
       return;
     }
 
@@ -131,7 +162,7 @@ async function handleDownload(chatId, url, audioOnly) {
       } else {
         await bot.sendVideo(chatId, filePath, {}, { filename: files[0], contentType: 'video/mp4' });
       }
-      await bot.deleteMessage(chatId, statusMsg.message_id).catch(() => {});
+      await bot.deleteMessage(chatId, statusMessageId).catch(() => {});
     } catch (sendErr) {
       console.error(sendErr);
       bot.sendMessage(chatId, "❌ Faylni yuborishda xatolik yuz berdi (fayl juda katta bo'lishi mumkin, Telegram limiti 50MB).");
