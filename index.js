@@ -103,6 +103,12 @@ function getCookiesPath() {
   }
 }
 
+// Tezlik uchun umumiy flaglar:
+// -4            IPv6 timeoutlarining oldini olish (cloud hostinglarda odatiy sabab)
+// -N 4          fragmentlarni (DASH) parallel yuklash
+// --no-update   avtomatik versiya tekshiruvini o'chirish
+const SPEED_FLAGS = '-4 -N 4 --no-update';
+
 function buildYtDlpFlags(platform) {
   const cookiesPath = getCookiesPath();
   const cookiesArg = cookiesPath ? `--cookies "${cookiesPath}"` : '';
@@ -113,7 +119,7 @@ function buildYtDlpFlags(platform) {
     ? `--extractor-args "youtube:player_client=android,web"`
     : '';
 
-  return `${cookiesArg} ${extractorArgs}`;
+  return `${SPEED_FLAGS} ${cookiesArg} ${extractorArgs}`;
 }
 
 async function handleDownload(chatId, url, audioOnly) {
@@ -153,9 +159,9 @@ async function handleMusicSearch(chatId, query) {
   const statusMsg = await bot.sendMessage(chatId, `🔎 "${query}" qidirilmoqda...`);
 
   const safeQuery = query.replace(/"/g, '');
-  // Qidiruv bosqichida cookies/extractor-args shart emas — bu bosqichni tezlashtiradi.
-  // --skip-download va qisqa timeout bilan faqat ro'yxatni tez olamiz.
-  const cmd = `yt-dlp --flat-playlist --skip-download --socket-timeout 10 --print "%(id)s|||%(title)s" "ytsearch10:${safeQuery}"`;
+  // Qidiruv bosqichida ham -4 va android client ishlatamiz — bu YouTube javobini
+  // sezilarli tezlashtiradi (kamroq metama'lumot, kamroq cheklov, IPv6 timeout yo'q).
+  const cmd = `yt-dlp -4 --no-update --extractor-args "youtube:player_client=android" --flat-playlist --skip-download --socket-timeout 8 --print "%(id)s|||%(title)s" "ytsearch10:${safeQuery}"`;
 
   exec(cmd, { maxBuffer: 1024 * 1024 * 20 }, async (error, stdout) => {
     if (error || !stdout.trim()) {
