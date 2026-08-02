@@ -1,16 +1,16 @@
 {
   "name": "telegram-media-downloader-bot",
-  "version": "1.0.0",
-  "description": "Instagram, TikTok, YouTube Downloader & Music Search Bot",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Instagram, TikTok va YouTube downloader Telegram bot",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
-  "dependencies": {
-    "dotenv": "^16.4.5",
-    "node-telegram-bot-api": "^0.66.0"
-  },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=18"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7"
   }
 }
