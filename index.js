@@ -276,11 +276,12 @@ bot.on('callback_query', async (query) => {
   const fileId = crypto.randomBytes(6).toString('hex');
   const outputTemplate = path.join(DOWNLOAD_DIR, `${fileId}.%(ext)s`);
   const flags = buildYtDlpFlags('YouTube');
-  // MUHIM: -x --audio-format mp3 OLIB TASHLANDI — bu ffmpeg orqali qayta kodlashni
-  // talab qilib, eng sekin qadam edi. Buning o'rniga eng yaxshi audio formatni
-  // (odatda m4a/opus) TO'G'RIDAN-TO'G'RI yuklaymiz, konvertatsiyasiz.
-  // Telegram bu formatlarni sendAudio orqali muammosiz qabul qiladi.
-  const cmd = `yt-dlp ${flags} -f "bestaudio/best" -o "${outputTemplate}" "${url}"`;
+  // MUHIM: avval "bestaudio" xom holida (.webm) yuborilgan edi — Telegram uni
+  // audio pleer sifatida emas, oddiy fayl sifatida ko'rsatib qo'ygan edi.
+  // Hozir: avval YouTube'ning tayyor m4a (AAC) oqimini tanlaymiz — bunda ffmpeg
+  // faqat "qadoqni" almashtiradi (remux), qayta kodlamaydi, demak SEKINLASHMAYDI.
+  // m4a mavjud bo'lmagan kamdan-kam holatlarda ffmpeg haqiqiy konvertatsiya qiladi.
+  const cmd = `yt-dlp ${flags} -f "bestaudio[ext=m4a]/bestaudio" -x --audio-format m4a -o "${outputTemplate}" "${url}"`;
 
   runAndSend(cmd, chatId, statusMsg.message_id, fileId, true, `❌ "${chosen.title}" yuklab bo'lmadi.`, chosen.id, chosen.title);
 });
