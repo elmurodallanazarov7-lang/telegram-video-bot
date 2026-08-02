@@ -108,7 +108,31 @@ setInterval(() => {
   }
 }, 10 * 60 * 1000);
 
-// Oddiy xabar — link bo'lsa "Video/Audio" tanlash tugmalarini ko'rsatadi,
+// Sifat darajalari — tugmalarda ko'rsatiladi. yt-dlp shu balandlikdan katta
+// bo'lmagan eng yaxshi formatni tanlaydi; agar video shu sifatda mavjud bo'lmasa,
+// eng yaqin pastroq sifatni qaytaradi (xato bermaydi).
+const QUALITY_LEVELS = [360, 480, 720, 1080];
+
+// Havoladan tezkor metama'lumot (thumbnail + sarlavha) olish — faylni yuklamaydi,
+// shuning uchun juda tez ishlaydi.
+function getMediaInfo(url) {
+  return new Promise((resolve) => {
+    const cmd = `yt-dlp -4 --no-warnings --no-update --skip-download --print "%(thumbnail)s|||%(title)s" "${url}"`;
+    exec(cmd, { maxBuffer: 1024 * 1024 * 10, timeout: 15000 }, (error, stdout) => {
+      if (error || !stdout.trim()) {
+        resolve(null);
+        return;
+      }
+      const [thumbnail, ...titleParts] = stdout.trim().split('\n')[0].split('|||');
+      resolve({
+        thumbnail: thumbnail && thumbnail !== 'NA' ? thumbnail : null,
+        title: titleParts.join('|||').trim() || 'Nomsiz'
+      });
+    });
+  });
+}
+
+// Oddiy xabar — link bo'lsa preview + sifat tanlash tugmalarini ko'rsatadi,
 // aks holda qo'shiq nomi sifatida qidiradi
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
@@ -128,15 +152,36 @@ bot.on('message', async (msg) => {
     const linkId = crypto.randomBytes(4).toString('hex');
     LINK_CACHE.set(linkId, { url, timestamp: Date.now() });
 
-    bot.sendMessage(chatId, `${platform} havolasi aniqlandi. Nimani yuklab olay?`, {
-      reply_markup: {
-        inline_keyboard: [[
-          // Bot API 9.4: "style" maydoni faqat "danger", "primary", "success" qiymatlarini qabul qiladi.
-          { text: '🎥 Video', callback_data: `dl:${linkId}:video`, style: 'primary' },
-          { text: '🎵 Audio', callback_data: `dl:${linkId}:audio`, style: 'success' }
-        ]]
-      }
-    });
+    const statusMsg = await bot.sendMessage(chatId, `⏳ ${platform} havolasi tekshirilmoqda...`);
+    const info = await getMediaInfo(url);
+
+    // Sifat tugmalarini 2 tadan qatorlarga bo'lib joylashtiramiz, oxirida Audio
+    const qualityButtons = QUALITY_LEVELS.map(q => ({
+      text: `🎬 ${q}p`,
+      callback_data: `dl:${linkId}:v${q}`
+    }));
+    const keyboard = [];
+    for (let i = 0; i < qualityButtons.length; i += 2) {
+      keyboard.push(qualityButtons.slice(i, i + 2));
+    }
+    keyboard.push([{ text: '🎵 Audio', callback_data: `dl:${linkId}:audio` }]);
+
+    await bot.deleteMessage(chatId, statusMsg.message_id).catch(() => {});
+
+    const caption = info ? `🎬 *${info.title}*\n\nQaysi sifatda yuklab olay?` : `${platform} havolasi aniqlandi. Qaysi sifatda yuklab olay?`;
+
+    if (info && info.thumbnail) {
+      bot.sendPhoto(chatId, info.thumbnail, {
+        caption,
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: keyboard }
+      }).catch(() => {
+        // Thumbnail yuklab bo'lmasa (masalan havola muddati tugagan), oddiy matn bilan davom etamiz
+        bot.sendMessage(chatId, caption, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } });
+      });
+    } else {
+      bot.sendMessage(chatId, caption, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } });
+    }
   } else {
     await handleMusicSearch(chatId, text.trim());
   }
@@ -228,22 +273,28 @@ function prefetchAudio(videoId, title) {
   PENDING_PREFETCH.set(videoId, promise);
 }
 
-async function handleDownload(chatId, url, audioOnly) {
+async function handleDownload(chatId, url, audioOnly, height) {
   const platform = detectPlatform(url);
   if (!platform) {
     bot.sendMessage(chatId, "❌ Bu havolani tanib bo'lmadi. Instagram, TikTok yoki YouTube havolasini yuboring.");
     return;
   }
 
-  const statusMsg = await bot.sendMessage(chatId, `⏳ ${platform}'dan ${audioOnly ? 'musiqa' : 'video'} yuklanmoqda...`);
+  const statusMsg = await bot.sendMessage(chatId, `⏳ ${platform}'dan ${audioOnly ? 'musiqa' : (height ? height + 'p video' : 'video')} yuklanmoqda...`);
 
   const fileId = crypto.randomBytes(6).toString('hex');
   const outputTemplate = path.join(DOWNLOAD_DIR, `${fileId}.%(ext)s`);
   const flags = buildYtDlpFlags(platform);
 
+  // height berilgan bo'lsa — o'sha balandlikdan katta bo'lmagan eng yaxshi formatni tanlaymiz.
+  // Video haqiqiy sifati past bo'lsa, yt-dlp xato bermasdan mavjud eng yaqinini oladi.
+  const videoFormat = height
+    ? `bestvideo[height<=${height}]+bestaudio/best[height<=${height}]/mp4/best`
+    : `mp4/best`;
+
   const cmd = audioOnly
     ? `yt-dlp ${flags} -f "bestaudio[ext=m4a]/bestaudio" -x --audio-format m4a -o "${outputTemplate}" "${url}"`
-    : `yt-dlp ${flags} -f "mp4/best" -o "${outputTemplate}" "${url}"`;
+    : `yt-dlp ${flags} -f "${videoFormat}" --merge-output-format mp4 -o "${outputTemplate}" "${url}"`;
 
   // MUHIM TUZATISH: avval bu yerda "audioOnly" o'rniga doim "true" yuborilar edi —
   // ya'ni video tanlansa ham runAndSend uni AUDIO sifatida yuborishga urinardi.
@@ -340,10 +391,13 @@ bot.on('callback_query', async (query) => {
     return;
   }
 
-  bot.answerCallbackQuery(query.id, { text: kind === 'audio' ? '⏳ Audio yuklanmoqda...' : '⏳ Video yuklanmoqda...' }).catch(() => {});
+  const isAudio = kind === 'audio';
+  const height = isAudio ? null : parseInt(kind.replace('v', ''), 10);
+
+  bot.answerCallbackQuery(query.id, { text: isAudio ? '⏳ Audio yuklanmoqda...' : `⏳ ${height}p video yuklanmoqda...` }).catch(() => {});
   bot.deleteMessage(chatId, query.message.message_id).catch(() => {});
 
-  await handleDownload(chatId, cached.url, kind === 'audio');
+  await handleDownload(chatId, cached.url, isAudio, height);
 });
 
 // Tugma bosilganda — tanlangan qo'shiqni yuklab yuborish
