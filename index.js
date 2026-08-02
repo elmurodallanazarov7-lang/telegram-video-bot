@@ -112,9 +112,15 @@ function getCookiesPath() {
 function buildYtDlpFlags(platform) {
   const cookiesPath = getCookiesPath();
   const cookiesArg = cookiesPath ? `--cookies "${cookiesPath}"` : '';
-  const extractorArgs = (platform === 'YouTube' && !cookiesPath)
-    ? `--extractor-args "youtube:player_client=android,web"`
+
+  // Deno mavjud bo'lsa — YouTube JS challengelarini hal qilish uchun ishlatiladi (tezroq va ishonchliroq)
+  const denoPath = '/root/.deno/bin/deno';
+  const fs2 = require('fs');
+  const denoExists = fs2.existsSync(denoPath);
+  const extractorArgs = platform === 'YouTube'
+    ? `--extractor-args "youtube:player_client=${denoExists ? 'web' : 'android,web'}${denoExists ? ';player_skip=webpage' : ''}"`
     : '';
+
   return `${getSpeedFlags()} ${cookiesArg} ${extractorArgs}`;
 }
 
