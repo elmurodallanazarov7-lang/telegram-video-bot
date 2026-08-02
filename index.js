@@ -88,14 +88,30 @@ bot.on('message', async (msg) => {
   }
 });
 
+// Render'ning Secret Files papkasi (/etc/secrets/) faqat o'qish uchun — yt-dlp esa
+// cookies faylini yangilab qayta yozishga urinadi. Shu sabab uni yoziladigan joyga nusxalaymiz.
+const WRITABLE_COOKIES_PATH = path.join(DOWNLOAD_DIR, 'cookies.txt');
+function getCookiesPath() {
+  const secretPath = '/etc/secrets/cookies.txt';
+  if (!fs.existsSync(secretPath)) return null;
+  try {
+    fs.copyFileSync(secretPath, WRITABLE_COOKIES_PATH);
+    return WRITABLE_COOKIES_PATH;
+  } catch (e) {
+    console.error('cookies.txt nusxalashda xatolik:', e);
+    return secretPath; // fallback, lekin write xatosi chiqishi mumkin
+  }
+}
+
 function buildYtDlpFlags(platform) {
-  // Render'da "Secret Files" orqali yuklangan cookies.txt bo'lsa, undan foydalanamiz
-  // (YouTube/Instagram'ning "Sign in to confirm you're not a bot" himoyasini chetlab o'tish uchun)
-  const cookiesPath = fs.existsSync('/etc/secrets/cookies.txt') ? '/etc/secrets/cookies.txt' : null;
+  const cookiesPath = getCookiesPath();
   const cookiesArg = cookiesPath ? `--cookies "${cookiesPath}"` : '';
 
-  // YouTube uchun android client orqali so'rov yuborish ko'pincha bot-tekshiruvini chetlab o'tishga yordam beradi
-  const extractorArgs = platform === 'YouTube' ? `--extractor-args "youtube:player_client=android,web"` : '';
+  // Cookies mavjud bo'lsa, standart web client yetarli va formatlar to'liq keladi.
+  // Cookies bo'lmasa, android client bot-tekshiruvini chetlab o'tishga yordam berishi mumkin.
+  const extractorArgs = (platform === 'YouTube' && !cookiesPath)
+    ? `--extractor-args "youtube:player_client=android,web"`
+    : '';
 
   return `${cookiesArg} ${extractorArgs}`;
 }
