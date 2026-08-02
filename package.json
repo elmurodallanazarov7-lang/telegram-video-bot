@@ -1,0 +1,13 @@
+{
+  "name": "telegram-video-downloader-bot",
+  "version": "1.0.0",
+  "description": "Instagram, TikTok, YouTube'dan video va musiqa yuklab beruvchi Telegram bot",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "node-telegram-bot-api": "^0.66.0",
+    "dotenv": "^16.4.5"
+  }
+}
