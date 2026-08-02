@@ -149,7 +149,12 @@ function prepareCookies() {
   }
 }
 
-const YT_CLIENTS = ["android,web", "tv_embedded", "ios", "web"];
+// "web" va "web_safari" 2026-yildan beri YouTube SABR streaming'ni
+// majburlaydi va PO Token bo'lmasa faqat rasm(thumbnail) formatlarini
+// qaytaradi ("Requested format is not available"). Shu sabab ular
+// ro'yxatdan olib tashlangan; tv/android/ios ko'pincha PO Tokensiz ham
+// oddiy (progressive) formatlarni beradi.
+const YT_CLIENTS = ["tv", "android", "ios", "tv_embedded"];
 
 function ytArgs(url, clientOverride) {
   const args = [
@@ -162,7 +167,10 @@ function ytArgs(url, clientOverride) {
   ];
   if (runtimeCookiesPath) args.push("--cookies", runtimeCookiesPath);
   if (detectPlatform(url) === "YouTube") {
-    args.push("--extractor-args", `youtube:player_client=${clientOverride || YT_CLIENTS[0]}`);
+    args.push(
+      "--extractor-args",
+      `youtube:player_client=${clientOverride || YT_CLIENTS[0]};formats=missing_pot`,
+    );
   }
   return args;
 }
