@@ -1,462 +1,479 @@
-require('dotenv').config();
-const TelegramBot = require('node-telegram-bot-api');
-const { exec, execFile } = require('child_process');
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
+require("dotenv").config();
 
+const { execFile, spawn } = require("child_process");
+const crypto = require("crypto");
+const fs = require("fs");
+const fsp = fs.promises;
+const http = require("http");
+const path = require("path");
+const { promisify } = require("util");
+
+const execFileAsync = promisify(execFile);
 const TOKEN = process.env.BOT_TOKEN;
+const PORT = Number(process.env.PORT || 10000);
+const DOWNLOAD_DIR = path.resolve(process.env.DOWNLOAD_DIR || "./downloads");
+const MAX_FILE_BYTES = 49 * 1024 * 1024;
+const CACHE_TTL = 30 * 60 * 1000;
+
 if (!TOKEN) {
-  console.error("❌ BOT_TOKEN topilmadi! .env faylga tokeningizni qo'shing.");
+  console.error("BOT_TOKEN topilmadi. Render Environment Variables ga BOT_TOKEN qo‘shing.");
   process.exit(1);
 }
 
-const bot = new TelegramBot(TOKEN, { polling: true });
+const telegram = `https://api.telegram.org/bot${TOKEN}`;
+const links = new Map();
+const searches = new Map();
+const activeChats = new Set();
+let updateOffset = 0;
+let polling = true;
+let conflictLoggedAt = 0;
 
-if (process.env.PORT) {
-  const http = require('http');
-  http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('Bot ishlayapti ✅');
-  }).listen(process.env.PORT, () => {
-    console.log(`🌐 Health-check server ${process.env.PORT}-portda ishga tushdi`);
-  });
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-const DOWNLOAD_DIR = path.join(__dirname, 'downloads');
-if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR);
-
-// --- Audio kesh ---
-const CACHE_FILE = path.join(DOWNLOAD_DIR, 'audio_cache.json');
-let AUDIO_CACHE = {};
-try { AUDIO_CACHE = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8')); } catch (e) { AUDIO_CACHE = {}; }
-let cacheSaveTimer = null;
-function saveAudioCache() {
-  clearTimeout(cacheSaveTimer);
-  cacheSaveTimer = setTimeout(() => {
-    fs.writeFile(CACHE_FILE, JSON.stringify(AUDIO_CACHE), () => {});
-  }, 500);
+function cleanTitle(value, limit = 180) {
+  return String(value || "Nomsiz media")
+    .replace(/[*_`[\]]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, limit) || "Nomsiz media";
 }
-
-const STORAGE_CHAT_ID = process.env.STORAGE_CHAT_ID || null;
-const PENDING_PREFETCH = new Map();
-const URL_REGEX = /(https?:\/\/[^\s]+)/i;
 
 function detectPlatform(url) {
-  if (/instagram\.com/i.test(url)) return 'Instagram';
-  if (/tiktok\.com/i.test(url)) return 'TikTok';
-  if (/youtube\.com|youtu\.be/i.test(url)) return 'YouTube';
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+    if (host === "instagram.com" || host.endsWith(".instagram.com")) return "Instagram";
+    if (host === "tiktok.com" || host.endsWith(".tiktok.com")) return "TikTok";
+    if (
+      host === "youtube.com" ||
+      host.endsWith(".youtube.com") ||
+      host === "youtu.be"
+    ) return "YouTube";
+  } catch (_) {}
   return null;
 }
 
-bot.onText(/^\/start/, (msg) => {
-  bot.sendMessage(msg.chat.id,
-    "Salom! 👋\n\nMen Instagram, TikTok va YouTube'dan video va musiqa yuklab beraman.\n\n" +
-    "📥 Havolani yuboring — Video yoki Audio tanlaysiz\n" +
-    "🔎 Qo'shiq nomini yozing — qidirib beraman",
-    { parse_mode: 'Markdown' }
-  );
-});
-
-bot.onText(/^\/help/, (msg) => {
-  bot.sendMessage(msg.chat.id,
-    "🤖 Buyruqlar:\n/start - Botni ishga tushirish\n/help - Yordam\n\n" +
-    "📥 Havola yuboring → Video yoki Audio tugmasini bosing.\n" +
-    "🔎 Qo'shiq nomini yozing → bot qidirib beradi."
-  );
-});
-
-bot.onText(/^\/mp3\s+(.+)/i, async (msg, match) => {
-  await handleDownload(msg.chat.id, match[1].trim(), true);
-});
-
-const LINK_CACHE = new Map();
-setInterval(() => {
-  const THIRTY_MIN = 30 * 60 * 1000;
-  const now = Date.now();
-  for (const [key, val] of LINK_CACHE) {
-    if (now - val.timestamp > THIRTY_MIN) LINK_CACHE.delete(key);
-  }
-}, 10 * 60 * 1000);
-
-const QUALITY_LEVELS = [360, 480, 720, 1080];
-
-// TUZATISH 1: aria2c mavjudligini tekshiramiz — yo'q bo'lsa ishlatmaymiz
-let ARIA2C_AVAILABLE = false;
-exec('which aria2c', (err) => {
-  ARIA2C_AVAILABLE = !err;
-  console.log(ARIA2C_AVAILABLE ? '✅ aria2c mavjud — tez rejim yoqildi' : '⚠️ aria2c topilmadi — oddiy rejimda ishlaydi');
-});
-
-// TUZATISH 2: aria2c bo'lmasa uni ishlatmaymiz, shunda yt-dlp hang bo'lmaydi
-function getSpeedFlags() {
-  const base = '-4 -N 4 --no-update';
-  if (ARIA2C_AVAILABLE) {
-    return base + ' --external-downloader aria2c --external-downloader-args "-x 8 -s 8 -k 1M"';
-  }
-  return base; // aria2c yo'q — oddiy yt-dlp
+function extractUrl(text) {
+  const match = String(text).match(/https?:\/\/[^\s<>"']+/i);
+  return match ? match[0].replace(/[),.!?]+$/, "") : null;
 }
 
-const WRITABLE_COOKIES_PATH = path.join(DOWNLOAD_DIR, 'cookies.txt');
-function getCookiesPath() {
-  const secretPath = '/etc/secrets/cookies.txt';
-  if (!fs.existsSync(secretPath)) return null;
-  try {
-    fs.copyFileSync(secretPath, WRITABLE_COOKIES_PATH);
-    return WRITABLE_COOKIES_PATH;
-  } catch (e) {
-    return secretPath;
+async function tg(method, body = {}, timeout = 40000) {
+  const response = await fetch(`${telegram}/${method}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(timeout),
+  });
+  const payload = await response.json();
+  if (!response.ok || !payload.ok) {
+    const error = new Error(payload.description || `Telegram ${method} failed`);
+    error.code = payload.error_code;
+    throw error;
   }
+  return payload.result;
 }
 
-function buildYtDlpFlags(platform) {
-  const cookiesPath = getCookiesPath();
-  const cookiesArg = cookiesPath ? `--cookies "${cookiesPath}"` : '';
+async function sendFile(method, chatId, filePath, filename, fields = {}) {
+  const form = new FormData();
+  form.append("chat_id", String(chatId));
+  for (const [key, value] of Object.entries(fields)) {
+    form.append(key, String(value));
+  }
+  const bytes = await fsp.readFile(filePath);
+  form.append(method === "sendAudio" ? "audio" : "video", new Blob([bytes]), filename);
 
-  // Deno mavjud bo'lsa — YouTube JS challengelarini hal qilish uchun ishlatiladi (tezroq va ishonchliroq)
-  const denoPath = '/root/.deno/bin/deno';
-  const fs2 = require('fs');
-  const denoExists = fs2.existsSync(denoPath);
-  const extractorArgs = platform === 'YouTube'
-    ? `--extractor-args "youtube:player_client=${denoExists ? 'web' : 'android,web'}${denoExists ? ';player_skip=webpage' : ''}"`
-    : '';
-
-  return `${getSpeedFlags()} ${cookiesArg} ${extractorArgs}`;
+  const response = await fetch(`${telegram}/${method}`, {
+    method: "POST",
+    body: form,
+    signal: AbortSignal.timeout(120000),
+  });
+  const payload = await response.json();
+  if (!response.ok || !payload.ok) {
+    const error = new Error(payload.description || `Telegram ${method} failed`);
+    error.code = payload.error_code;
+    throw error;
+  }
+  return payload.result;
 }
 
-// TUZATISH 3: getMediaInfo parallel ishlaydi — tugmalarni KO'RSATIB BO'LGACH chaqiramiz
-function getMediaInfo(url) {
-  return new Promise((resolve) => {
-    const cmd = `yt-dlp -4 --no-warnings --no-update --skip-download --print "%(thumbnail)s|||%(title)s" "${url}"`;
-    exec(cmd, { maxBuffer: 1024 * 1024 * 10, timeout: 12000 }, (error, stdout) => {
-      if (error || !stdout.trim()) { resolve(null); return; }
-      const [thumbnail, ...titleParts] = stdout.trim().split('\n')[0].split('|||');
-      resolve({
-        thumbnail: thumbnail && thumbnail !== 'NA' ? thumbnail : null,
-        title: titleParts.join('|||').trim() || 'Nomsiz'
-      });
+function run(command, args, timeout) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    let done = false;
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      if (!done) {
+        done = true;
+        reject(new Error(`${command} timeout`));
+      }
+    }, timeout);
+
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      if (!done) {
+        done = true;
+        reject(error);
+      }
+    });
+    child.once("close", (code) => {
+      clearTimeout(timer);
+      if (done) return;
+      done = true;
+      if (code === 0) resolve({ stdout, stderr });
+      else reject(new Error(stderr.trim() || `${command} exited with ${code}`));
     });
   });
 }
 
-// Asosiy xabar handler
-bot.on('message', async (msg) => {
-  const chatId = msg.chat.id;
-  const text = msg.text || '';
-  if (text.startsWith('/')) return;
+function ytArgs(url) {
+  const args = [
+    "--no-warnings",
+    "--no-update",
+    "--no-playlist",
+    "--socket-timeout", "20",
+    "--retries", "2",
+    "--fragment-retries", "2",
+    "--concurrent-fragments", "4",
+  ];
+  const cookies = process.env.YT_DLP_COOKIES_FILE || "/etc/secrets/cookies.txt";
+  if (fs.existsSync(cookies)) args.push("--cookies", cookies);
+  if (detectPlatform(url) === "YouTube") {
+    // Do not force android: it often exposes image-only formats and causes
+    // "Requested format is not available".
+    args.push("--extractor-args", "youtube:player_client=web_safari");
+  }
+  return args;
+}
 
-  const match = text.match(URL_REGEX);
-  if (match) {
-    const url = match[1];
+async function mediaInfo(url) {
+  try {
+    const { stdout } = await run("yt-dlp", [
+      ...ytArgs(url), "--dump-single-json", "--skip-download", url,
+    ], 30000);
+    const data = JSON.parse(stdout);
+    return { title: cleanTitle(data.title), thumbnail: data.thumbnail };
+  } catch (error) {
+    console.warn("Media info olinmadi:", error.message);
+    return null;
+  }
+}
+
+async function findFile(prefix) {
+  const names = await fsp.readdir(DOWNLOAD_DIR);
+  const candidates = [];
+  for (const name of names) {
+    if (!name.startsWith(`${prefix}.`)) continue;
+    const filePath = path.join(DOWNLOAD_DIR, name);
+    const stat = await fsp.stat(filePath);
+    if (stat.isFile()) candidates.push({ filePath, time: stat.mtimeMs });
+  }
+  candidates.sort((a, b) => b.time - a.time);
+  return candidates[0] ? candidates[0].filePath : null;
+}
+
+async function download(url, kind, height) {
+  const prefix = `media-${crypto.randomBytes(8).toString("hex")}`;
+  const output = path.join(DOWNLOAD_DIR, `${prefix}.%(ext)s`);
+  const base = [...ytArgs(url), "-o", output];
+
+  if (kind === "audio") {
+    await run("yt-dlp", [
+      ...base,
+      "-f", "bestaudio/best",
+      "-x", "--audio-format", "mp3", "--audio-quality", "128K",
+      url,
+    ], 180000);
+  } else {
+    const quality = Math.max(144, Math.min(Number(height) || 720, 1080));
+    const format = `bestvideo[height<=${quality}]+bestaudio/best[height<=${quality}]/best`;
+    try {
+      await run("yt-dlp", [
+        ...base, "-f", format, "--merge-output-format", "mp4",
+        "--max-filesize", "49M", url,
+      ], 180000);
+    } catch (firstError) {
+      console.warn("Video format fallback:", firstError.message);
+      await run("yt-dlp", [
+        ...base, "-f", "best", "--merge-output-format", "mp4",
+        "--max-filesize", "49M", url,
+      ], 180000);
+    }
+  }
+
+  const filePath = await findFile(prefix);
+  if (!filePath) throw new Error("Fayl yaratilmagan");
+  const stat = await fsp.stat(filePath);
+  if (stat.size > MAX_FILE_BYTES) {
+    await fsp.unlink(filePath).catch(() => {});
+    throw new Error("FILE_TOO_LARGE");
+  }
+  return filePath;
+}
+
+function linkKeyboard(id) {
+  return {
+    inline_keyboard: [
+      [
+        { text: "Video 360p", callback_data: `dl:${id}:v360` },
+        { text: "Video 480p", callback_data: `dl:${id}:v480` },
+      ],
+      [
+        { text: "Video 720p", callback_data: `dl:${id}:v720` },
+        { text: "Video 1080p", callback_data: `dl:${id}:v1080` },
+      ],
+      [{ text: "Audio MP3", callback_data: `dl:${id}:audio` }],
+    ],
+  };
+}
+
+async function downloadAndSend(chatId, url, kind, height, title) {
+  if (activeChats.has(chatId)) {
+    await tg("sendMessage", { chat_id: chatId, text: "Bu chatda boshqa yuklash davom etmoqda." });
+    return;
+  }
+  activeChats.add(chatId);
+  const status = await tg("sendMessage", {
+    chat_id: chatId,
+    text: kind === "audio" ? "Audio yuklanmoqda..." : `${height || 720}p video yuklanmoqda...`,
+  });
+  let filePath = null;
+  try {
+    filePath = await download(url, kind, height);
+    const filename = path.basename(filePath);
+    if (kind === "audio") {
+      await sendFile("sendAudio", chatId, filePath, filename, {
+        title: cleanTitle(title || "YouTube audio"),
+        performer: "Media Downloader",
+      });
+    } else {
+      await sendFile("sendVideo", chatId, filePath, filename, {
+        supports_streaming: "true",
+        caption: cleanTitle(title || ""),
+      });
+    }
+    await tg("deleteMessage", { chat_id: chatId, message_id: status.message_id }).catch(() => {});
+  } catch (error) {
+    console.error("Yuklash xatosi:", error.message);
+    const message = error.message === "FILE_TOO_LARGE"
+      ? "Fayl 49 MB dan katta. Pastroq sifatni tanlang."
+      : "Yuklab bo‘lmadi. Video yopiq, login talab qiladigan yoki vaqtincha mavjud emas bo‘lishi mumkin.";
+    await tg("editMessageText", {
+      chat_id: chatId, message_id: status.message_id, text: message,
+    }).catch(() => {});
+  } finally {
+    activeChats.delete(chatId);
+    if (filePath) await fsp.unlink(filePath).catch(() => {});
+  }
+}
+
+async function handleSearch(chatId, query) {
+  if (!query || query.length < 2 || query.length > 120) return;
+  const status = await tg("sendMessage", {
+    chat_id: chatId, text: `"${cleanTitle(query)}" qidirilmoqda...`,
+  });
+  try {
+    const { stdout } = await run("yt-dlp", [
+      ...ytArgs("https://www.youtube.com"),
+      "--flat-playlist", "--skip-download", "--print", "%(id)s\t%(title)s",
+      `ytsearch5:${query}`,
+    ], 40000);
+    const results = stdout.trim().split(/\r?\n/).map((line) => {
+      const [id, ...parts] = line.split("\t");
+      return { id: id && id.trim(), title: cleanTitle(parts.join("\t")) };
+    }).filter((item) => item.id);
+    if (!results.length) throw new Error("Natija yo‘q");
+
+    const searchId = crypto.randomBytes(5).toString("hex");
+    searches.set(searchId, { results, time: Date.now() });
+    await tg("editMessageText", {
+      chat_id: chatId,
+      message_id: status.message_id,
+      text: `Qidiruv natijalari:\n\n${results.map((x, i) => `${i + 1}. ${x.title}`).join("\n")}`,
+      reply_markup: {
+        inline_keyboard: results.map((x, i) => [
+          { text: `${i + 1}. ${cleanTitle(x.title, 45)}`, callback_data: `pick:${searchId}:${i}` },
+        ]),
+      },
+    });
+  } catch (error) {
+    console.warn("Qidiruv xatosi:", error.message);
+    await tg("editMessageText", {
+      chat_id: chatId, message_id: status.message_id,
+      text: "Natija topilmadi. Boshqa nom bilan qayta urinib ko‘ring.",
+    }).catch(() => {});
+  }
+}
+
+async function handleMessage(message) {
+  const chatId = message.chat.id;
+  const text = String(message.text || "").trim();
+  if (!text) return;
+
+  if (/^\/start(?:@\w+)?$/i.test(text)) {
+    await tg("sendMessage", {
+      chat_id: chatId,
+      text: "Salom!\n\nInstagram, TikTok yoki YouTube havolasini yuboring. Video sifati yoki Audio MP3 formatini tanlang.\n\nQo‘shiq nomini yuborsangiz, YouTube’dan qidiraman.\n/help — yordam",
+    });
+    return;
+  }
+  if (/^\/help(?:@\w+)?$/i.test(text)) {
+    await tg("sendMessage", {
+      chat_id: chatId,
+      text: "1. Instagram, TikTok yoki YouTube havolasini yuboring.\n2. Video sifatini yoki Audio MP3 tugmasini bosing.\n3. Qidiruv uchun qo‘shiq nomini yozing.\n\nTelegram 49 MB dan katta fayllarni qabul qilmaydi.",
+    });
+    return;
+  }
+  if (/^\/mp3\s+/i.test(text)) {
+    return handleSearch(chatId, text.replace(/^\/mp3\s+/i, "").trim());
+  }
+
+  const url = extractUrl(text);
+  if (url) {
     const platform = detectPlatform(url);
     if (!platform) {
-      bot.sendMessage(chatId, "❌ Bu havolani tanib bo'lmadi. Instagram, TikTok yoki YouTube havolasini yuboring.");
+      await tg("sendMessage", {
+        chat_id: chatId,
+        text: "Bu havola qo‘llab-quvvatlanmaydi. Instagram, TikTok yoki YouTube havolasini yuboring.",
+      });
       return;
     }
-
-    const linkId = crypto.randomBytes(4).toString('hex');
-    LINK_CACHE.set(linkId, { url, timestamp: Date.now() });
-
-    // TUZATISH 4: AVVAL tugmalarni ko'rsatamiz — foydalanuvchi kutmaydi
-    const qualityButtons = QUALITY_LEVELS.map(q => ({
-      text: `🎬 ${q}p`,
-      callback_data: `dl:${linkId}:v${q}`
-    }));
-    const keyboard = [];
-    for (let i = 0; i < qualityButtons.length; i += 2) {
-      keyboard.push(qualityButtons.slice(i, i + 2));
-    }
-    keyboard.push([{ text: '🎵 Audio (MP3)', callback_data: `dl:${linkId}:audio` }]);
-
-    // Darhol tugmalarni yuboramiz — thumbnail kelishi kutilmaydi
-    const sentMsg = await bot.sendMessage(chatId,
-      `📥 *${platform}* havolasi aniqlandi.\n\nQaysi formatda yuklab olay?`,
-      { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } }
-    );
-
-    // KEYIN — fon rejimida thumbnail + sarlavha yuklaymiz
-    // Agar muvaffaqiyatli bo'lsa, xabarni yangilaymiz
-    getMediaInfo(url).then(info => {
-      if (!info) return;
-      const caption = `🎬 *${info.title}*\n\nQaysi formatda yuklab olay?`;
-      if (info.thumbnail) {
-        // Thumbnail bilan yangi xabar — eskisini o'chiramiz
-        bot.sendPhoto(chatId, info.thumbnail, {
-          caption,
-          parse_mode: 'Markdown',
-          reply_markup: { inline_keyboard: keyboard }
-        }).then(() => {
-          bot.deleteMessage(chatId, sentMsg.message_id).catch(() => {});
-        }).catch(() => {
-          // Thumbnail ishlamasa — matnli xabarni yangilaymiz
-          bot.editMessageText(caption, {
-            chat_id: chatId,
-            message_id: sentMsg.message_id,
-            parse_mode: 'Markdown',
-            reply_markup: { inline_keyboard: keyboard }
-          }).catch(() => {});
-        });
-      } else {
-        bot.editMessageText(caption, {
-          chat_id: chatId,
-          message_id: sentMsg.message_id,
-          parse_mode: 'Markdown',
-          reply_markup: { inline_keyboard: keyboard }
-        }).catch(() => {});
-      }
-    });
-
-  } else {
-    await handleMusicSearch(chatId, text.trim());
-  }
-});
-
-function prefetchAudio(videoId, title) {
-  if (!STORAGE_CHAT_ID) return;
-  if (AUDIO_CACHE[videoId] || PENDING_PREFETCH.has(videoId)) return;
-
-  const promise = new Promise((resolve) => {
-    const url = `https://www.youtube.com/watch?v=${videoId}`;
-    const fileKey = crypto.randomBytes(6).toString('hex');
-    const outputTemplate = path.join(DOWNLOAD_DIR, `${fileKey}.%(ext)s`);
-    const flags = buildYtDlpFlags('YouTube');
-    const cmd = `yt-dlp ${flags} -f "bestaudio[ext=m4a]/bestaudio" -x --audio-format m4a -o "${outputTemplate}" "${url}"`;
-
-    exec(cmd, { maxBuffer: 1024 * 1024 * 50 }, async (error, stdout, stderr) => {
-      if (error) { console.error(`[prefetch] xatolik:`, stderr || error.message); resolve(null); return; }
-      const files = fs.readdirSync(DOWNLOAD_DIR).filter(f => f.startsWith(fileKey));
-      if (!files.length) { resolve(null); return; }
-      const filePath = path.join(DOWNLOAD_DIR, files[0]);
-      try {
-        const sent = await bot.sendAudio(STORAGE_CHAT_ID, filePath, { title });
-        if (sent?.audio?.file_id) {
-          AUDIO_CACHE[videoId] = sent.audio.file_id;
-          saveAudioCache();
-          resolve(sent.audio.file_id);
-        } else { resolve(null); }
-      } catch (e) { console.error(`[prefetch] xatolik:`, e.message); resolve(null); }
-        finally { fs.unlink(filePath, () => {}); }
-    });
-  }).finally(() => PENDING_PREFETCH.delete(videoId));
-
-  PENDING_PREFETCH.set(videoId, promise);
-}
-
-async function handleDownload(chatId, url, audioOnly, height) {
-  const platform = detectPlatform(url);
-  if (!platform) {
-    bot.sendMessage(chatId, "❌ Bu havolani tanib bo'lmadi.");
-    return;
-  }
-
-  const statusMsg = await bot.sendMessage(chatId,
-    `⏳ ${platform}'dan ${audioOnly ? 'musiqa' : (height ? height + 'p video' : 'video')} yuklanmoqda...`
-  );
-
-  const fileId = crypto.randomBytes(6).toString('hex');
-  const outputTemplate = path.join(DOWNLOAD_DIR, `${fileId}.%(ext)s`);
-  const flags = buildYtDlpFlags(platform);
-
-  const videoFormat = height
-    ? `bestvideo[height<=${height}]+bestaudio/best[height<=${height}]/mp4/best`
-    : `mp4/best`;
-
-  const cmd = audioOnly
-    ? `yt-dlp ${flags} -f "bestaudio[ext=m4a]/bestaudio" -x --audio-format m4a -o "${outputTemplate}" "${url}"`
-    : `yt-dlp ${flags} -f "${videoFormat}" --merge-output-format mp4 -o "${outputTemplate}" "${url}"`;
-
-  runAndSend(cmd, chatId, statusMsg.message_id, fileId, audioOnly,
-    `❌ Yuklab bo'lmadi. Havola noto'g'ri yoki video mavjud emas.`);
-}
-
-const SEARCH_CACHE = new Map();
-setInterval(() => {
-  const THIRTY_MIN = 30 * 60 * 1000;
-  const now = Date.now();
-  for (const [key, val] of SEARCH_CACHE) {
-    if (now - val.timestamp > THIRTY_MIN) SEARCH_CACHE.delete(key);
-  }
-}, 10 * 60 * 1000);
-
-async function handleMusicSearch(chatId, query) {
-  if (!query || query.length < 2) return;
-  const statusMsg = await bot.sendMessage(chatId, `🔎 "${query}" qidirilmoqda...`);
-  const safeQuery = query.replace(/"/g, '');
-
-  // TUZATISH 5: socket-timeout qisqartirildi, natijalar 5ga tushirildi (tezroq)
-  const cmd = `yt-dlp -4 --no-update --extractor-args "youtube:player_client=android" ` +
-    `--flat-playlist --skip-download --socket-timeout 6 ` +
-    `--print "%(id)s|||%(title)s" "ytsearch8:${safeQuery}"`;
-
-  const t0 = Date.now();
-  exec(cmd, { maxBuffer: 1024 * 1024 * 20, timeout: 20000 }, async (error, stdout) => {
-    console.log(`[qidiruv] "${query}": ${((Date.now() - t0) / 1000).toFixed(1)}s`);
-    if (error || !stdout.trim()) {
-      bot.editMessageText(`❌ "${query}" bo'yicha hech narsa topilmadi.`, {
-        chat_id: chatId, message_id: statusMsg.message_id
-      }).catch(() => {});
-      return;
-    }
-
-    const results = stdout.trim().split('\n').map(line => {
-      const [id, ...titleParts] = line.split('|||');
-      return { id: id.trim(), title: titleParts.join('|||').trim() || 'Nomsiz' };
-    }).filter(r => r.id);
-
-    if (!results.length) {
-      bot.editMessageText(`❌ "${query}" bo'yicha hech narsa topilmadi.`, {
-        chat_id: chatId, message_id: statusMsg.message_id
-      }).catch(() => {});
-      return;
-    }
-
-    const searchId = crypto.randomBytes(4).toString('hex');
-    SEARCH_CACHE.set(searchId, { results, timestamp: Date.now() });
-
-    const listText = `🔎 *"${query}"* natijalari:\n\n` +
-      results.map((r, i) => `${i + 1}. ${r.title}`).join('\n');
-
-    const buttons = results.map((r, i) => ({
-      text: `🎵 ${i + 1}`,
-      callback_data: `pick:${searchId}:${i}`
-    }));
-    const keyboard = [];
-    for (let i = 0; i < buttons.length; i += 5) keyboard.push(buttons.slice(i, i + 5));
-
-    bot.editMessageText(listText, {
+    const id = crypto.randomBytes(5).toString("hex");
+    links.set(id, { url, time: Date.now() });
+    const sent = await tg("sendMessage", {
       chat_id: chatId,
-      message_id: statusMsg.message_id,
-      parse_mode: 'Markdown',
-      reply_markup: { inline_keyboard: keyboard }
-    }).catch(() => {});
-
-    prefetchAudio(results[0].id, results[0].title);
-  });
+      text: `${platform} havolasi aniqlandi.\nFormatni tanlang:`,
+      reply_markup: linkKeyboard(id),
+    });
+    mediaInfo(url).then((info) => {
+      if (!info) return;
+      tg("editMessageText", {
+        chat_id: chatId,
+        message_id: sent.message_id,
+        text: `${info.title}\n\nFormatni tanlang:`,
+        reply_markup: linkKeyboard(id),
+      }).catch(() => {});
+    });
+    return;
+  }
+  return handleSearch(chatId, text);
 }
 
-// Callback handler — havola uchun
-bot.on('callback_query', async (query) => {
-  const chatId = query.message.chat.id;
-  const data = query.data || '';
-  if (!data.startsWith('dl:')) return;
+async function handleCallback(query) {
+  const data = query.data || "";
+  const chatId = query.message && query.message.chat.id;
+  if (!chatId) return;
 
-  const [, linkId, kind] = data.split(':');
-  const cached = LINK_CACHE.get(linkId);
-  if (!cached) {
-    bot.answerCallbackQuery(query.id, { text: '⏱ Havola muddati tugagan, qayta yuboring.', show_alert: true }).catch(() => {});
-    return;
-  }
-
-  const isAudio = kind === 'audio';
-  const height = isAudio ? null : parseInt(kind.replace('v', ''), 10);
-
-  bot.answerCallbackQuery(query.id, { text: isAudio ? '⏳ Audio yuklanmoqda...' : `⏳ ${height}p yuklanmoqda...` }).catch(() => {});
-  bot.deleteMessage(chatId, query.message.message_id).catch(() => {});
-  await handleDownload(chatId, cached.url, isAudio, height);
-});
-
-// Callback handler — qidiruv uchun
-bot.on('callback_query', async (query) => {
-  const chatId = query.message.chat.id;
-  const data = query.data || '';
-  if (!data.startsWith('pick:')) return;
-
-  const [, searchId, indexStr] = data.split(':');
-  const cached = SEARCH_CACHE.get(searchId);
-  if (!cached) {
-    bot.answerCallbackQuery(query.id, { text: '⏱ Qidiruv muddati tugagan, qayta qidiring.', show_alert: true }).catch(() => {});
-    return;
-  }
-
-  const chosen = cached.results[parseInt(indexStr, 10)];
-  if (!chosen) {
-    bot.answerCallbackQuery(query.id, { text: '❌ Topilmadi.', show_alert: true }).catch(() => {});
-    return;
-  }
-
-  const cachedFileId = AUDIO_CACHE[chosen.id];
-  if (cachedFileId) {
-    bot.answerCallbackQuery(query.id, { text: `✅ ${chosen.title}` }).catch(() => {});
-    const statusMsg = await bot.sendMessage(chatId, `📤 "${chosen.title}" yuborilmoqda...`);
-    try {
-      await bot.sendAudio(chatId, cachedFileId);
-      await bot.deleteMessage(chatId, statusMsg.message_id).catch(() => {});
+  if (data.startsWith("dl:")) {
+    const [, id, kind] = data.split(":");
+    const cached = links.get(id);
+    if (!cached || Date.now() - cached.time > CACHE_TTL) {
+      await tg("answerCallbackQuery", {
+        callback_query_id: query.id, text: "Havola muddati tugagan.", show_alert: true,
+      });
       return;
-    } catch (e) {
-      delete AUDIO_CACHE[chosen.id];
-      saveAudioCache();
     }
+    await tg("answerCallbackQuery", { callback_query_id: query.id, text: "Yuklash boshlandi..." });
+    const audio = kind === "audio";
+    return downloadAndSend(
+      chatId, cached.url, audio ? "audio" : "video",
+      audio ? undefined : Number(kind.replace("v", "")),
+    );
   }
 
-  if (PENDING_PREFETCH.has(chosen.id)) {
-    bot.answerCallbackQuery(query.id, { text: `⏳ Deyarli tayyor...` }).catch(() => {});
-    const statusMsg = await bot.sendMessage(chatId, `⏳ "${chosen.title}" tayyorlanmoqda...`);
-    const fid = await PENDING_PREFETCH.get(chosen.id);
-    if (fid) {
-      try {
-        await bot.sendAudio(chatId, fid);
-        await bot.deleteMessage(chatId, statusMsg.message_id).catch(() => {});
-        return;
-      } catch (e) { /* fallback */ }
+  if (data.startsWith("pick:")) {
+    const [, id, indexText] = data.split(":");
+    const cached = searches.get(id);
+    const selected = cached && cached.results[Number(indexText)];
+    if (!selected || Date.now() - cached.time > CACHE_TTL) {
+      await tg("answerCallbackQuery", {
+        callback_query_id: query.id, text: "Qidiruv muddati tugagan.", show_alert: true,
+      });
+      return;
     }
-    return await downloadAndSendPick(chatId, chosen, statusMsg.message_id);
+    await tg("answerCallbackQuery", { callback_query_id: query.id, text: "MP3 tayyorlanmoqda..." });
+    return downloadAndSend(
+      chatId,
+      `https://www.youtube.com/watch?v=${selected.id}`,
+      "audio",
+      undefined,
+      selected.title,
+    );
   }
-
-  bot.answerCallbackQuery(query.id, { text: `⏳ Yuklanmoqda...` }).catch(() => {});
-  const statusMsg = await bot.sendMessage(chatId, `⏳ "${chosen.title}" yuklanmoqda...`);
-  return await downloadAndSendPick(chatId, chosen, statusMsg.message_id);
-});
-
-function downloadAndSendPick(chatId, chosen, statusMessageId) {
-  const url = `https://www.youtube.com/watch?v=${chosen.id}`;
-  const fileId = crypto.randomBytes(6).toString('hex');
-  const outputTemplate = path.join(DOWNLOAD_DIR, `${fileId}.%(ext)s`);
-  const flags = buildYtDlpFlags('YouTube');
-  const cmd = `yt-dlp ${flags} -f "bestaudio[ext=m4a]/bestaudio" -x --audio-format m4a -o "${outputTemplate}" "${url}"`;
-  const t0 = Date.now();
-  return runAndSend(cmd, chatId, statusMessageId, fileId, true,
-    `❌ "${chosen.title}" yuklab bo'lmadi.`, chosen.id, chosen.title, t0);
 }
 
-function runAndSend(cmd, chatId, statusMessageId, fileId, audioOnly, errorText, cacheKey, cacheTitle, t0) {
-  const startedAt = t0 || Date.now();
-  exec(cmd, { maxBuffer: 1024 * 1024 * 50, timeout: 120000 }, async (error, stdout, stderr) => {
-    const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
-    if (error) {
-      console.error(`[xato] ${elapsed}s dan keyin:`, stderr || error.message);
-      bot.editMessageText(errorText, { chat_id: chatId, message_id: statusMessageId }).catch(() => {});
-      return;
-    }
-
-    const files = fs.readdirSync(DOWNLOAD_DIR).filter(f => f.startsWith(fileId));
-    if (!files.length) {
-      bot.editMessageText("❌ Fayl topilmadi.", { chat_id: chatId, message_id: statusMessageId }).catch(() => {});
-      return;
-    }
-
-    const filePath = path.join(DOWNLOAD_DIR, files[0]);
-    const sizeMb = (fs.statSync(filePath).size / 1024 / 1024).toFixed(1);
-    console.log(`[yuklash] ${elapsed}s | ${sizeMb}MB | ${cacheTitle || fileId}`);
-
+async function poll() {
+  while (polling) {
     try {
-      if (audioOnly) {
-        const sent = await bot.sendAudio(chatId, filePath, cacheTitle ? { title: cacheTitle } : {});
-        if (cacheKey && sent?.audio?.file_id) {
-          AUDIO_CACHE[cacheKey] = sent.audio.file_id;
-          saveAudioCache();
+      const updates = await tg("getUpdates", {
+        offset: updateOffset,
+        timeout: 25,
+        allowed_updates: ["message", "callback_query"],
+      }, 40000);
+      for (const update of updates) {
+        updateOffset = update.update_id + 1;
+        try {
+          if (update.message) await handleMessage(update.message);
+          if (update.callback_query) await handleCallback(update.callback_query);
+        } catch (error) {
+          console.error("Update xatosi:", error.message);
         }
-      } else {
-        await bot.sendVideo(chatId, filePath, {}, { filename: files[0], contentType: 'video/mp4' });
       }
-      await bot.deleteMessage(chatId, statusMessageId).catch(() => {});
-    } catch (sendErr) {
-      console.error(sendErr);
-      bot.sendMessage(chatId, "❌ Faylni yuborishda xatolik (fayl 50MB dan katta bo'lishi mumkin).");
-    } finally {
-      fs.unlink(filePath, () => {});
+    } catch (error) {
+      if (error.code === 409) {
+        if (Date.now() - conflictLoggedAt > 60000) {
+          conflictLoggedAt = Date.now();
+          console.error("409 Conflict: BOT_TOKEN bilan boshqa bot nusxasi ham ishlayapti. Eski Render/Docker service’ni to‘xtating.");
+        }
+        await sleep(15000);
+      } else {
+        console.error("Polling xatosi:", error.message);
+        await sleep(3000);
+      }
     }
-  });
+  }
 }
 
-console.log("🤖 Bot ishga tushdi...");
-console.log(STORAGE_CHAT_ID ? `📦 Ombor: ${STORAGE_CHAT_ID}` : "⚠️ STORAGE_CHAT_ID yo'q — prefetch o'chirilgan");
+async function start() {
+  await fsp.mkdir(DOWNLOAD_DIR, { recursive: true });
+  try {
+    await execFileAsync("yt-dlp", ["--version"]);
+    await execFileAsync("ffmpeg", ["-version"]);
+  } catch (error) {
+    console.error("yt-dlp yoki ffmpeg topilmadi:", error.message);
+    process.exit(1);
+  }
+
+  await tg("deleteWebhook", { drop_pending_updates: false }).catch((error) => {
+    console.warn("Webhook tozalanmadi:", error.message);
+  });
+  console.log("Telegram downloader ishga tushdi.");
+  console.log(`Health server: port ${PORT}`);
+  poll();
+}
+
+const server = http.createServer((_req, res) => {
+  res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+  res.end("Telegram downloader ishlayapti");
+});
+
+server.listen(PORT, "0.0.0.0");
+start().catch((error) => {
+  console.error("Bot ishga tushmadi:", error);
+  process.exit(1);
+});
+
+function shutdown(signal) {
+  console.log(`${signal}: bot to‘xtatilmoqda`);
+  polling = false;
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 3000).unref();
+}
+
+process.once("SIGTERM", () => shutdown("SIGTERM"));
+process.once("SIGINT", () => shutdown("SIGINT"));
