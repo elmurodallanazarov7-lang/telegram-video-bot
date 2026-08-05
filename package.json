@@ -1,6 +1,6 @@
 {
   "name": "telegram-media-downloader-bot",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "private": true,
   "description": "Instagram, TikTok va YouTube downloader Telegram bot",
   "main": "index.js",
