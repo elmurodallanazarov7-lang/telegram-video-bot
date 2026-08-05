@@ -12,10 +12,11 @@ if (!TOKEN) {
   process.exit(1);
 }
 
+// DIQQAT: 2 GB fayl yuklash uchun siz Local Telegram Bot API server ishlatishingiz shart.
+// O'shanda kodni quyidagicha o'zgartirasiz (misol uchun):
+// const bot = new TelegramBot(TOKEN, { polling: true, baseApiUrl: 'http://localhost:8081' });
 const bot = new TelegramBot(TOKEN, { polling: true });
 
-// Render "Web Service" sifatida deploy qilinsa, portga ulanish talab qilinadi.
-// Agar PORT o'zgaruvchisi mavjud bo'lsa, oddiy health-check server ochamiz.
 if (process.env.PORT) {
   const http = require('http');
   http.createServer((req, res) => {
@@ -29,7 +30,6 @@ if (process.env.PORT) {
 const DOWNLOAD_DIR = path.join(__dirname, 'downloads');
 if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR);
 
-// --- Audio kesh: YouTube video ID -> Telegram file_id -------------------
 const CACHE_FILE = path.join(DOWNLOAD_DIR, 'audio_cache.json');
 let AUDIO_CACHE = {};
 try {
@@ -45,13 +45,8 @@ function saveAudioCache() {
   }, 500);
 }
 
-// Yashirin "ombor" chat/kanal
 const STORAGE_CHAT_ID = process.env.STORAGE_CHAT_ID || null;
-
-// videoId -> Promise<file_id|null>
 const PENDING_PREFETCH = new Map();
-
-// Havolani matndan topish uchun regex
 const URL_REGEX = /(https?:\/\/[^\s]+)/i;
 
 function detectPlatform(url) {
@@ -144,7 +139,6 @@ function getCookiesPath() {
   }
 }
 
-// Dockerfile'da aria2c yo'qligi sababli --external-downloader bayroqlari olib tashlandi
 const SPEED_FLAGS = '-4 -N 8 --no-update';
 
 function buildYtDlpFlags(platform) {
@@ -169,7 +163,8 @@ function prefetchAudio(videoId, title) {
     const flags = buildYtDlpFlags('YouTube');
     const cmd = `yt-dlp ${flags} -f "bestaudio[ext=m4a]/bestaudio" -x --audio-format m4a -o "${outputTemplate}" "${url}"`;
 
-    exec(cmd, { maxBuffer: 1024 * 1024 * 50 }, async (error, stdout, stderr) => {
+    // Bufer hajmi 2GB qilib o'zgartirildi (2048 MB)
+    exec(cmd, { maxBuffer: 1024 * 1024 * 2048 }, async (error, stdout, stderr) => {
       if (error) {
         console.error(`[prefetch] "${title}" yuklashda xatolik:`, stderr || error.message);
         resolve(null);
@@ -382,7 +377,8 @@ function downloadAndSendPick(chatId, chosen, statusMessageId) {
 
 function runAndSend(cmd, chatId, statusMessageId, fileId, audioOnly, errorText, cacheKey, cacheTitle, t0) {
   const startedAt = t0 || Date.now();
-  exec(cmd, { maxBuffer: 1024 * 1024 * 50 }, async (error, stdout, stderr) => {
+  // Bufer hajmi 2GB qilib o'zgartirildi (2048 MB)
+  exec(cmd, { maxBuffer: 1024 * 1024 * 2048 }, async (error, stdout, stderr) => {
     const downloadMs = Date.now() - startedAt;
     console.log(`[TIMING] yt-dlp jarayoni: ${(downloadMs / 1000).toFixed(1)}s (${cacheTitle || fileId})`);
 
@@ -423,14 +419,14 @@ function runAndSend(cmd, chatId, statusMessageId, fileId, audioOnly, errorText, 
       await bot.deleteMessage(chatId, statusMessageId).catch(() => {});
     } catch (sendErr) {
       console.error(sendErr);
-      bot.sendMessage(chatId, "❌ Faylni yuborishda xatolik yuz berdi (fayl juda katta bo'lishi mumkin, Telegram limiti 50MB).");
+      // Xatolik xabari 2GB ga moslab yozildi
+      bot.sendMessage(chatId, "❌ Faylni yuborishda xatolik yuz berdi (fayl hajmi 2GB dan oshgan bo'lishi mumkin yoki serverda muammo).");
     } finally {
       fs.unlink(filePath, () => {}); 
     }
   });
 }
 
-// Telegram serverlari bilan vaqtinchalik aloqa uzilganda bot to'xtab qolmasligi uchun qo'shildi
 bot.on('polling_error', (error) => {
   console.error('Polling xatosi:', error.code, error.message);
 });
