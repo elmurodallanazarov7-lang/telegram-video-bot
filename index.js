@@ -219,6 +219,26 @@ async function handleDownload(chatId, url, quality) {
   }
 
   const isAudio = quality === 'audio';
+
+  // Agar audio bo'lsa, avval keshni (bazani) tekshiramiz
+  let videoId = null;
+  if (platform === 'YouTube') {
+    const ytMatch = url.match(/(?:v=|\/)([0-9A-Za-z_-]{11}).*/);
+    if (ytMatch) videoId = ytMatch[1];
+  }
+
+  if (isAudio && videoId && AUDIO_CACHE[videoId]) {
+    const statusMsg = await bot.sendMessage(chatId, `⏳ Yuborilmoqda...`);
+    try {
+      await bot.sendAudio(chatId, AUDIO_CACHE[videoId]);
+      await bot.deleteMessage(chatId, statusMsg.message_id).catch(() => {});
+      return;
+    } catch (e) {
+      delete AUDIO_CACHE[videoId];
+      saveAudioCache();
+    }
+  }
+
   const statusMsg = await bot.sendMessage(chatId, `⏳ Yuklanmoqda...`);
 
   const fileId = crypto.randomBytes(6).toString('hex');
@@ -236,10 +256,6 @@ async function handleDownload(chatId, url, quality) {
 
   if (isAudio) {
     const t0 = Date.now();
-    let videoId = null;
-    const ytMatch = url.match(/(?:v=|\/)([0-9A-Za-z_-]{11}).*/);
-    if (ytMatch) videoId = ytMatch[1];
-
     return runAndSendAudioWithCache(cmd, chatId, statusMsg.message_id, fileId, videoId, t0);
   } else {
     return runAndSend(cmd, chatId, statusMsg.message_id, fileId, false, `❌ Videoni yuklab bo'lmadi.`);
@@ -255,7 +271,6 @@ function runAndSendAudioWithCache(cmd, chatId, statusMessageId, fileId, videoId,
       return;
     }
 
-    // JSON orqali video nomini aniqlash
     let songTitle = "Musiqa";
     try {
       const lines = stdout.trim().split('\n');
@@ -279,11 +294,11 @@ function runAndSendAudioWithCache(cmd, chatId, statusMessageId, fileId, videoId,
     try {
       let sentToStorage = null;
       if (STORAGE_CHAT_ID) {
-        sentToStorage = await bot.sendAudio(STORAGE_CHAT_ID, filePath, { title: songTitle, performer: '' });
+        sentToStorage = await bot.sendAudio(STORAGE_CHAT_ID, filePath, { title: songTitle });
       }
 
       if (sentToStorage && sentToStorage.audio && sentToStorage.audio.file_id) {
-        await bot.sendAudio(chatId, sentToStorage.audio.file_id);
+        await bot.sendAudio(chatId, sentToStorage.audio.file_id, { title: songTitle });
         if (videoId) {
           AUDIO_CACHE[videoId] = sentToStorage.audio.file_id;
           saveAudioCache();
