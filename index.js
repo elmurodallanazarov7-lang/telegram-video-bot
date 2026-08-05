@@ -186,6 +186,52 @@ function ytArgs(url, clientOverride) {
   return args;
 }
 
+// INVIDIOUS API ORQALI YOUTUBE'DAN MEDIA LINK OLISH
+async function getInvidiousDirectUrl(url, kind, height) {
+  try {
+    const urlObj = new URL(url);
+    let videoId = urlObj.searchParams.get("v");
+    if (!videoId && (urlObj.hostname === "youtu.be" || urlObj.hostname.endsWith(".youtu.be"))) {
+      videoId = urlObj.pathname.slice(1);
+    }
+    if (!videoId) return null;
+
+    const instances = [
+      "https://invidious.privacyredirect.com",
+      "https://inv.nadeko.net",
+      "https://vid.priv.au",
+      "https://invidious.fdn.fr"
+    ];
+
+    for (const instance of instances) {
+      try {
+        const res = await fetch(`${instance}/api/v1/videos/${videoId}`, {
+          signal: AbortSignal.timeout(10000)
+        });
+        if (!res.ok) continue;
+        const data = await res.json();
+        
+        if (kind === "audio") {
+          const adaptive = data.adaptiveFormats || [];
+          const audioFormat = adaptive.find(f => f.type && f.type.includes("audio/mp4")) || adaptive.find(f => f.type && f.type.includes("audio"));
+          if (audioFormat && audioFormat.url) return audioFormat.url;
+        } else {
+          const targetHeight = Number(height) || 720;
+          const formats = data.formatStreams || [];
+          let best = formats.find(f => f.resolution && f.resolution.includes(`${targetHeight}p`) && f.container === "mp4");
+          if (!best) {
+            best = formats.find(f => f.container === "mp4") || formats[0];
+          }
+          if (best && best.url) return best.url;
+        }
+      } catch (err) {}
+    }
+  } catch (e) {
+    console.warn("Invidious API orqali olishda xato:", e.message);
+  }
+  return null;
+}
+
 async function mediaInfo(url) {
   const clients = detectPlatform(url) === "YouTube" ? YT_CLIENTS : [null];
   for (const client of clients) {
@@ -195,11 +241,9 @@ async function mediaInfo(url) {
       ], 30000);
       const data = JSON.parse(stdout);
       return { title: cleanTitle(data.title), thumbnail: data.thumbnail };
-    } catch (error) {
-      console.warn(`Media info olinmadi (client=${client || "default"}):`, error.message);
-    }
+    } catch (error) {}
   }
-  return null;
+  return { title: "YouTube Media", thumbnail: null };
 }
 
 async function findFile(prefix) {
@@ -218,9 +262,34 @@ async function findFile(prefix) {
 async function download(url, kind, height) {
   const prefix = `media-${crypto.randomBytes(8).toString("hex")}`;
   const output = path.join(DOWNLOAD_DIR, `${prefix}.%(ext)s`);
-  const clients = detectPlatform(url) === "YouTube" ? YT_CLIENTS : [null];
 
+  if (detectPlatform(url) === "YouTube") {
+    console.log("YouTube uchun Invidious API orqali yuklashga harakat qilinmoqda...");
+    const directStreamUrl = await getInvidiousDirectUrl(url, kind, height);
+    if (directStreamUrl) {
+      try {
+        const targetPath = path.join(DOWNLOAD_DIR, `${prefix}.mp4`);
+        const res = await fetch(directStreamUrl);
+        if (res.ok) {
+          const buffer = Buffer.from(await res.arrayBuffer());
+          await fsp.writeFile(targetPath, buffer);
+          if (fs.existsSync(targetPath)) {
+            const stat = await fsp.stat(targetPath);
+            if (stat.size > 0 && stat.size <= MAX_FILE_BYTES) {
+              console.log("Invidious orqali muvaffaqiyatli yuklandi!");
+              return targetPath;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("Invidious orqali yuklab olishda xato, yt-dlp ga o'tilmoqda:", err.message);
+      }
+    }
+  }
+
+  const clients = detectPlatform(url) === "YouTube" ? YT_CLIENTS : [null];
   let lastError = null;
+
   for (const client of clients) {
     const base = [...ytArgs(url, client), "-o", output];
     try {
@@ -240,7 +309,6 @@ async function download(url, kind, height) {
             "--max-filesize", "49M", url,
           ], 180000);
         } catch (firstError) {
-          console.warn(`Video format fallback (client=${client || "default"}):`, firstError.message);
           await run("yt-dlp", [
             ...base, "-f", "best/b", "--merge-output-format", "mp4",
             "--max-filesize", "49M", url,
@@ -251,7 +319,6 @@ async function download(url, kind, height) {
       break;
     } catch (error) {
       lastError = error;
-      console.warn(`Yuklash urinishi muvaffaqiyatsiz (client=${client || "default"}):`, error.message);
     }
   }
   if (lastError) throw lastError;
@@ -299,7 +366,6 @@ async function downloadAndSend(chatId, url, kind, height, title) {
       });
       return;
     } catch (err) {
-      console.warn("Keshdagi file_id ishlamadi, qayta yuklanadi.");
       delete fileDB[dbKey];
       saveDB();
     }
@@ -369,7 +435,7 @@ async function downloadAndSend(chatId, url, kind, height, title) {
     console.error("Yuklash xatosi:", error.message);
     const message = error.message === "FILE_TOO_LARGE"
       ? "Fayl 49 MB dan katta. Telegram cheklovlari tufayli pastroq sifatni tanlang."
-      : "Yuklab bo‘lmadi. Format yo'q yoki himoyalangan video bo'lishi mumkin.";
+      : "Yuklab bo‘lmadi. Video yopiq yoki mavjud emas bo‘lishi mumkin.";
     await tg("editMessageText", {
       chat_id: chatId, message_id: status.message_id, text: message,
     }).catch(() => {});
@@ -568,7 +634,7 @@ async function start() {
   }
 
   await tg("deleteWebhook", { drop_pending_updates: false }).catch(() => {});
-  console.log("Telegram downloader optimallashtirilgan rejimda ishga tushdi.");
+  console.log("Telegram downloader Invidious API rejimida ishga tushdi.");
   poll();
 }
 
