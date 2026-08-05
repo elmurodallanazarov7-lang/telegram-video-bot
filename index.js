@@ -1,443 +1,440 @@
-process.env.NTBA_FIX_350 = 1; // Telegram API ogohlantirishini (DeprecationWarning) o'chirish[cite: 4]
+process.env.NTBA_FIX_350 = 1;
 
-require('dotenv').config();[cite: 4]
-const TelegramBot = require('node-telegram-bot-api');[cite: 4]
-const { exec } = require('child_process');[cite: 4]
-const fs = require('fs');[cite: 4]
-const path = require('path');[cite: 4]
-const crypto = require('crypto');[cite: 4]
+require('dotenv').config();
+const TelegramBot = require('node-telegram-bot-api');
+const { exec } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
 
-const TOKEN = process.env.BOT_TOKEN;[cite: 4]
+const TOKEN = process.env.BOT_TOKEN;
 
-if (!TOKEN) {[cite: 4]
-  console.error("❌ BOT_TOKEN topilmadi! .env faylga tokeningizni qo'shing.");[cite: 4]
-  process.exit(1);[cite: 4]
-}[cite: 4]
+if (!TOKEN) {
+  console.error("❌ BOT_TOKEN topilmadi! .env faylga tokeningizni qo'shing.");
+  process.exit(1);
+}
 
-const bot = new TelegramBot(TOKEN, { polling: true });[cite: 4]
+const bot = new TelegramBot(TOKEN, { polling: true });
 
-// RENDER UCHUN UYG'OTUVCHI SERVER QISMI
-if (process.env.PORT) {[cite: 4]
-  const http = require('http');[cite: 4]
-  const https = require('https'); // Ping uchun https qo'shildi[cite: 4]
+if (process.env.PORT) {
+  const http = require('http');
+  const https = require('https');
 
-  http.createServer((req, res) => {[cite: 4]
-    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });[cite: 4]
-    res.end('Bot ishlayapti ✅');[cite: 4]
-  }).listen(process.env.PORT, () => {[cite: 4]
-    console.log(`🌐 Health-check server ${process.env.PORT}-portda ishga tushdi`);[cite: 4]
+  http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Bot ishlayapti ✅');
+  }).listen(process.env.PORT, () => {
+    console.log(`🌐 Health-check server ${process.env.PORT}-portda ishga tushdi`);
     
-    // Har 14 daqiqada o'ziga ping yuborish (Uyg'oq tutish uchun)
-    setInterval(() => {[cite: 4]
-      const RENDER_URL = 'https://telegram-video-bot-k1xp.onrender.com/'; [cite: 4]
+    setInterval(() => {
+      const RENDER_URL = 'https://telegram-video-bot-k1xp.onrender.com/'; 
       
-      https.get(RENDER_URL, (res) => {[cite: 4]
-        console.log(`⏱ Uyg'otish pingi yuborildi: ${res.statusCode}`);[cite: 4]
-      }).on('error', (e) => {[cite: 4]
-        console.error(`Ping xatosi: ${e.message}`);[cite: 4]
-      });[cite: 4]
-    }, 14 * 60 * 1000); // 14 daqiqa[cite: 4]
-  });[cite: 4]
-}[cite: 4]
+      https.get(RENDER_URL, (res) => {
+        console.log(`⏱ Uyg'otish pingi yuborildi: ${res.statusCode}`);
+      }).on('error', (e) => {
+        console.error(`Ping xatosi: ${e.message}`);
+      });
+    }, 14 * 60 * 1000);
+  });
+}
 
-const DOWNLOAD_DIR = path.join(__dirname, 'downloads');[cite: 4]
-if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR);[cite: 4]
+const DOWNLOAD_DIR = path.join(__dirname, 'downloads');
+if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR);
 
-const CACHE_FILE = path.join(DOWNLOAD_DIR, 'audio_cache.json');[cite: 4]
-let AUDIO_CACHE = {};[cite: 4]
-try {[cite: 4]
-  AUDIO_CACHE = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));[cite: 4]
-} catch (e) {[cite: 4]
-  AUDIO_CACHE = {};[cite: 4]
-}[cite: 4]
-let cacheSaveTimer = null;[cite: 4]
-function saveAudioCache() {[cite: 4]
-  clearTimeout(cacheSaveTimer);[cite: 4]
-  cacheSaveTimer = setTimeout(() => {[cite: 4]
-    fs.writeFile(CACHE_FILE, JSON.stringify(AUDIO_CACHE), () => {});[cite: 4]
-  }, 500);[cite: 4]
-}[cite: 4]
+const CACHE_FILE = path.join(DOWNLOAD_DIR, 'audio_cache.json');
+let AUDIO_CACHE = {};
+try {
+  AUDIO_CACHE = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
+} catch (e) {
+  AUDIO_CACHE = {};
+}
+let cacheSaveTimer = null;
+function saveAudioCache() {
+  clearTimeout(cacheSaveTimer);
+  cacheSaveTimer = setTimeout(() => {
+    fs.writeFile(CACHE_FILE, JSON.stringify(AUDIO_CACHE), () => {});
+  }, 500);
+}
 
-// KANAL ID TO'G'RIDAN TO'G'RI KIRITILDI (Atrofida bir tirnoq bilan)
 const STORAGE_CHAT_ID = '-1004290504683'; 
-const PENDING_PREFETCH = new Map();[cite: 4]
-const URL_REGEX = /(https?:\/\/[^\s]+)/i;[cite: 4]
+const PENDING_PREFETCH = new Map();
+const URL_REGEX = /(https?:\/\/[^\s]+)/i;
 
-function detectPlatform(url) {[cite: 4]
-  if (/instagram\.com/i.test(url)) return 'Instagram';[cite: 4]
-  if (/tiktok\.com/i.test(url)) return 'TikTok';[cite: 4]
-  if (/youtube\.com|youtu\.be/i.test(url)) return 'YouTube';[cite: 4]
-  return null;[cite: 4]
-}[cite: 4]
+function detectPlatform(url) {
+  if (/instagram\.com/i.test(url)) return 'Instagram';
+  if (/tiktok\.com/i.test(url)) return 'TikTok';
+  if (/youtube\.com|youtu\.be/i.test(url)) return 'YouTube';
+  return null;
+}
 
-bot.onText(/^\/start/, (msg) => {[cite: 4]
-  const chatId = msg.chat.id;[cite: 4]
-  bot.sendMessage(chatId,[cite: 4]
-    "Salom! 👋\n\n" +[cite: 4]
-    "Men Instagram, TikTok va YouTube'dan video va musiqa yuklab beraman.\n\n" +[cite: 4]
-    "📥 *Video/audio yuklash:* shunchaki havolani yuboring.\n" +[cite: 4]
-    "🔎 *Qo'shiq nomi bilan qidirish:* shunchaki qo'shiq/ijrochi nomini yozing\n\n" +[cite: 4]
-    "Masalan:\n" +[cite: 4]
-    "`https://www.tiktok.com/@user/video/123456`\n" +[cite: 4]
-    "`Ummon guruhi - Sensiz`",[cite: 4]
-    { parse_mode: 'Markdown' }[cite: 4]
-  );[cite: 4]
-});[cite: 4]
+bot.onText(/^\/start/, (msg) => {
+  const chatId = msg.chat.id;
+  bot.sendMessage(chatId,
+    "Salom! 👋\n\n" +
+    "Men Instagram, TikTok va YouTube'dan video va musiqa yuklab beraman.\n\n" +
+    "📥 *Video/audio yuklash:* shunchaki havolani yuboring.\n" +
+    "🔎 *Qo'shiq nomi bilan qidirish:* shunchaki qo'shiq/ijrochi nomini yozing\n\n" +
+    "Masalan:\n" +
+    "`https://www.tiktok.com/@user/video/123456`\n" +
+    "`Ummon guruhi - Sensiz`",
+    { parse_mode: 'Markdown' }
+  );
+});
 
-bot.onText(/^\/help/, (msg) => {[cite: 4]
-  bot.sendMessage(msg.chat.id,[cite: 4]
-    "🤖 Buyruqlar:\n" +[cite: 4]
-    "/start - Botni ishga tushirish\n" +[cite: 4]
-    "/help - Yordam"[cite: 4]
-  );[cite: 4]
-});[cite: 4]
+bot.onText(/^\/help/, (msg) => {
+  bot.sendMessage(msg.chat.id,
+    "🤖 Buyruqlar:\n" +
+    "/start - Botni ishga tushirish\n" +
+    "/help - Yordam"
+  );
+});
 
-bot.onText(/^\/mp3\s+(.+)/i, async (msg, match) => {[cite: 4]
-  const chatId = msg.chat.id;[cite: 4]
-  const url = match[1].trim();[cite: 4]
-  await handleDownload(chatId, url, 'audio');[cite: 4]
-});[cite: 4]
+bot.onText(/^\/mp3\s+(.+)/i, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const url = match[1].trim();
+  await handleDownload(chatId, url, 'audio');
+});
 
-const LINK_CACHE = new Map();[cite: 4]
-setInterval(() => {[cite: 4]
-  const THIRTY_MIN = 30 * 60 * 1000;[cite: 4]
-  const now = Date.now();[cite: 4]
-  for (const [key, val] of LINK_CACHE) {[cite: 4]
-    if (now - val.timestamp > THIRTY_MIN) LINK_CACHE.delete(key);[cite: 4]
-  }[cite: 4]
-}, 10 * 60 * 1000);[cite: 4]
+const LINK_CACHE = new Map();
+setInterval(() => {
+  const THIRTY_MIN = 30 * 60 * 1000;
+  const now = Date.now();
+  for (const [key, val] of LINK_CACHE) {
+    if (now - val.timestamp > THIRTY_MIN) LINK_CACHE.delete(key);
+  }
+}, 10 * 60 * 1000);
 
-bot.on('message', async (msg) => {[cite: 4]
-  const chatId = msg.chat.id;[cite: 4]
-  const text = msg.text || '';[cite: 4]
+bot.on('message', async (msg) => {
+  const chatId = msg.chat.id;
+  const text = msg.text || '';
 
-  if (text.startsWith('/')) return;[cite: 4]
+  if (text.startsWith('/')) return;
 
-  const match = text.match(URL_REGEX);[cite: 4]
-  if (match) {[cite: 4]
-    const url = match[1];[cite: 4]
-    const platform = detectPlatform(url);[cite: 4]
-    if (!platform) {[cite: 4]
-      bot.sendMessage(chatId, "❌ Bu havolani tanib bo'lmadi. Instagram, TikTok yoki YouTube havolasini yuboring.");[cite: 4]
-      return;[cite: 4]
-    }[cite: 4]
+  const match = text.match(URL_REGEX);
+  if (match) {
+    const url = match[1];
+    const platform = detectPlatform(url);
+    if (!platform) {
+      bot.sendMessage(chatId, "❌ Bu havolani tanib bo'lmadi. Instagram, TikTok yoki YouTube havolasini yuboring.");
+      return;
+    }
 
-    const linkId = crypto.randomBytes(4).toString('hex');[cite: 4]
-    LINK_CACHE.set(linkId, { url, timestamp: Date.now() });[cite: 4]
+    const linkId = crypto.randomBytes(4).toString('hex');
+    LINK_CACHE.set(linkId, { url, timestamp: Date.now() });
 
-    bot.sendMessage(chatId, `Formatni tanlang:`, {[cite: 4]
-      reply_markup: {[cite: 4]
-        inline_keyboard: [[cite: 4]
-          [[cite: 4]
-            { text: 'Video 360p', callback_data: `dl:${linkId}:360` },[cite: 4]
-            { text: 'Video 480p', callback_data: `dl:${linkId}:480` }[cite: 4]
-          ],[cite: 4]
-          [[cite: 4]
-            { text: 'Video 720p', callback_data: `dl:${linkId}:720` },[cite: 4]
-            { text: 'Video 1080p', callback_data: `dl:${linkId}:1080` }[cite: 4]
-          ],[cite: 4]
-          [[cite: 4]
-            { text: 'Audio MP3', callback_data: `dl:${linkId}:audio` }[cite: 4]
-          ][cite: 4]
-        ][cite: 4]
-      }[cite: 4]
-    });[cite: 4]
-  } else {[cite: 4]
-    await handleMusicSearch(chatId, text.trim());[cite: 4]
-  }[cite: 4]
-});[cite: 4]
+    bot.sendMessage(chatId, `Formatni tanlang:`, {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: 'Video 360p', callback_data: `dl:${linkId}:360` },
+            { text: 'Video 480p', callback_data: `dl:${linkId}:480` }
+          ],
+          [
+            { text: 'Video 720p', callback_data: `dl:${linkId}:720` },
+            { text: 'Video 1080p', callback_data: `dl:${linkId}:1080` }
+          ],
+          [
+            { text: 'Audio MP3', callback_data: `dl:${linkId}:audio` }
+          ]
+        ]
+      }
+    });
+  } else {
+    await handleMusicSearch(chatId, text.trim());
+  }
+});
 
-const WRITABLE_COOKIES_PATH = path.join(DOWNLOAD_DIR, 'cookies.txt');[cite: 4]
-function getCookiesPath() {[cite: 4]
-  const secretPath = '/etc/secrets/cookies.txt';[cite: 4]
-  if (!fs.existsSync(secretPath)) return null;[cite: 4]
-  try {[cite: 4]
-    fs.copyFileSync(secretPath, WRITABLE_COOKIES_PATH);[cite: 4]
-    return WRITABLE_COOKIES_PATH;[cite: 4]
-  } catch (e) {[cite: 4]
-    return secretPath;[cite: 4]
-  }[cite: 4]
-}[cite: 4]
+const WRITABLE_COOKIES_PATH = path.join(DOWNLOAD_DIR, 'cookies.txt');
+function getCookiesPath() {
+  const secretPath = '/etc/secrets/cookies.txt';
+  if (!fs.existsSync(secretPath)) return null;
+  try {
+    fs.copyFileSync(secretPath, WRITABLE_COOKIES_PATH);
+    return WRITABLE_COOKIES_PATH;
+  } catch (e) {
+    return secretPath;
+  }
+}
 
-const SPEED_FLAGS = '-4 -N 8 --no-update';[cite: 4]
+const SPEED_FLAGS = '-4 -N 8 --no-update';
 
-function buildYtDlpFlags(platform) {[cite: 4]
-  const cookiesPath = getCookiesPath();[cite: 4]
-  const cookiesArg = cookiesPath ? `--cookies "${cookiesPath}"` : '';[cite: 4]
+function buildYtDlpFlags(platform) {
+  const cookiesPath = getCookiesPath();
+  const cookiesArg = cookiesPath ? `--cookies "${cookiesPath}"` : '';
 
-  const extractorArgs = (platform === 'YouTube' && !cookiesPath)[cite: 4]
-    ? `--extractor-args "youtube:player_client=android,web"`[cite: 4]
-    : '';[cite: 4]
+  const extractorArgs = (platform === 'YouTube' && !cookiesPath)
+    ? `--extractor-args "youtube:player_client=android,web"`
+    : '';
 
-  return `${SPEED_FLAGS} ${cookiesArg} ${extractorArgs}`;[cite: 4]
-}[cite: 4]
+  return `${SPEED_FLAGS} ${cookiesArg} ${extractorArgs}`;
+}
 
-function prefetchAudio(videoId, title) {[cite: 4]
-  if (!STORAGE_CHAT_ID) return;[cite: 4]
-  if (AUDIO_CACHE[videoId] || PENDING_PREFETCH.has(videoId)) return;[cite: 4]
+function prefetchAudio(videoId, title) {
+  if (!STORAGE_CHAT_ID) return;
+  if (AUDIO_CACHE[videoId] || PENDING_PREFETCH.has(videoId)) return;
 
-  const promise = new Promise((resolve) => {[cite: 4]
-    const url = `https://www.youtube.com/watch?v=${videoId}`;[cite: 4]
-    const fileKey = crypto.randomBytes(6).toString('hex');[cite: 4]
-    const outputTemplate = path.join(DOWNLOAD_DIR, `${fileKey}.%(ext)s`);[cite: 4]
-    const flags = buildYtDlpFlags('YouTube');[cite: 4]
-    const cmd = `yt-dlp ${flags} -f "bestaudio/best" -x --audio-format mp3 -o "${outputTemplate}" "${url}"`;[cite: 4]
+  const promise = new Promise((resolve) => {
+    const url = `https://www.youtube.com/watch?v=${videoId}`;
+    const fileKey = crypto.randomBytes(6).toString('hex');
+    const outputTemplate = path.join(DOWNLOAD_DIR, `${fileKey}.%(ext)s`);
+    const flags = buildYtDlpFlags('YouTube');
+    const cmd = `yt-dlp ${flags} -f "bestaudio/best" -x --audio-format mp3 -o "${outputTemplate}" "${url}"`;
 
-    exec(cmd, { maxBuffer: 1024 * 1024 * 2048 }, async (error, stdout, stderr) => {[cite: 4]
-      if (error) {[cite: 4]
-        resolve(null);[cite: 4]
-        return;[cite: 4]
-      }[cite: 4]
-      const files = fs.readdirSync(DOWNLOAD_DIR).filter(f => f.startsWith(fileKey));[cite: 4]
-      if (files.length === 0) {[cite: 4]
-        resolve(null);[cite: 4]
-        return;[cite: 4]
-      }[cite: 4]
-      const filePath = path.join(DOWNLOAD_DIR, files[0]);[cite: 4]
-      try {[cite: 4]
-        const sent = await bot.sendAudio(STORAGE_CHAT_ID, filePath, { title });[cite: 4]
-        if (sent && sent.audio && sent.audio.file_id) {[cite: 4]
-          AUDIO_CACHE[videoId] = sent.audio.file_id;[cite: 4]
-          saveAudioCache();[cite: 4]
-          resolve(sent.audio.file_id);[cite: 4]
-        } else {[cite: 4]
-          resolve(null);[cite: 4]
-        }[cite: 4]
-      } catch (e) {[cite: 4]
-        resolve(null);[cite: 4]
-      } finally {[cite: 4]
-        fs.unlink(filePath, () => {});[cite: 4]
-      }[cite: 4]
-    });[cite: 4]
-  }).finally(() => PENDING_PREFETCH.delete(videoId));[cite: 4]
+    exec(cmd, { maxBuffer: 1024 * 1024 * 2048 }, async (error, stdout, stderr) => {
+      if (error) {
+        resolve(null);
+        return;
+      }
+      const files = fs.readdirSync(DOWNLOAD_DIR).filter(f => f.startsWith(fileKey));
+      if (files.length === 0) {
+        resolve(null);
+        return;
+      }
+      const filePath = path.join(DOWNLOAD_DIR, files[0]);
+      try {
+        const sent = await bot.sendAudio(STORAGE_CHAT_ID, filePath, { title });
+        if (sent && sent.audio && sent.audio.file_id) {
+          AUDIO_CACHE[videoId] = sent.audio.file_id;
+          saveAudioCache();
+          resolve(sent.audio.file_id);
+        } else {
+          resolve(null);
+        }
+      } catch (e) {
+        resolve(null);
+      } finally {
+        fs.unlink(filePath, () => {});
+      }
+    });
+  }).finally(() => PENDING_PREFETCH.delete(videoId));
 
-  PENDING_PREFETCH.set(videoId, promise);[cite: 4]
-}[cite: 4]
+  PENDING_PREFETCH.set(videoId, promise);
+}
 
-async function handleDownload(chatId, url, quality) {[cite: 4]
-  const platform = detectPlatform(url);[cite: 4]
-  if (!platform) {[cite: 4]
-    bot.sendMessage(chatId, "❌ Bu havolani tanib bo'lmadi.");[cite: 4]
-    return;[cite: 4]
-  }[cite: 4]
+async function handleDownload(chatId, url, quality) {
+  const platform = detectPlatform(url);
+  if (!platform) {
+    bot.sendMessage(chatId, "❌ Bu havolani tanib bo'lmadi.");
+    return;
+  }
 
-  const isAudio = quality === 'audio';[cite: 4]
-  const statusMsg = await bot.sendMessage(chatId, `⏳ Yuklanmoqda...`);[cite: 4]
+  const isAudio = quality === 'audio';
+  const statusMsg = await bot.sendMessage(chatId, `⏳ Yuklanmoqda...`);
 
-  const fileId = crypto.randomBytes(6).toString('hex');[cite: 4]
-  const outputTemplate = path.join(DOWNLOAD_DIR, `${fileId}.%(ext)s`);[cite: 4]
-  const flags = buildYtDlpFlags(platform);[cite: 4]
+  const fileId = crypto.randomBytes(6).toString('hex');
+  const outputTemplate = path.join(DOWNLOAD_DIR, `${fileId}.%(ext)s`);
+  const flags = buildYtDlpFlags(platform);
 
-  let formatCmd = '';[cite: 4]
-  if (isAudio) {[cite: 4]
-    formatCmd = `-f "bestaudio/best" -x --audio-format mp3`; [cite: 4]
-  } else {[cite: 4]
-    formatCmd = `-f "bestvideo[height<=${quality}][ext=mp4]+bestaudio[ext=m4a]/best[height<=${quality}][ext=mp4]/best" --merge-output-format mp4`;[cite: 4]
-  }[cite: 4]
+  let formatCmd = '';
+  if (isAudio) {
+    formatCmd = `-f "bestaudio/best" -x --audio-format mp3`; 
+  } else {
+    formatCmd = `-f "bestvideo[height<=${quality}][ext=mp4]+bestaudio[ext=m4a]/best[height<=${quality}][ext=mp4]/best" --merge-output-format mp4`;
+  }
 
-  const cmd = `yt-dlp ${flags} ${formatCmd} -o "${outputTemplate}" "${url}"`;[cite: 4]
+  const cmd = `yt-dlp ${flags} ${formatCmd} -o "${outputTemplate}" "${url}"`;
 
-  runAndSend(cmd, chatId, statusMsg.message_id, fileId, isAudio, `❌ Yuklab bo'lmadi. Havola noto'g'ri bo'lishi mumkin.`);[cite: 4]
-}[cite: 4]
+  runAndSend(cmd, chatId, statusMsg.message_id, fileId, isAudio, `❌ Yuklab bo'lmadi. Havola noto'g'ri bo'lishi mumkin.`);
+}
 
-const SEARCH_CACHE = new Map();[cite: 4]
-setInterval(() => {[cite: 4]
-  const THIRTY_MIN = 30 * 60 * 1000;[cite: 4]
-  const now = Date.now();[cite: 4]
-  for (const [key, val] of SEARCH_CACHE) {[cite: 4]
-    if (now - val.timestamp > THIRTY_MIN) SEARCH_CACHE.delete(key);[cite: 4]
-  }[cite: 4]
-}, 10 * 60 * 1000);[cite: 4]
+const SEARCH_CACHE = new Map();
+setInterval(() => {
+  const THIRTY_MIN = 30 * 60 * 1000;
+  const now = Date.now();
+  for (const [key, val] of SEARCH_CACHE) {
+    if (now - val.timestamp > THIRTY_MIN) SEARCH_CACHE.delete(key);
+  }
+}, 10 * 60 * 1000);
 
-async function handleMusicSearch(chatId, query) {[cite: 4]
-  if (!query || query.length < 2) return;[cite: 4]
+async function handleMusicSearch(chatId, query) {
+  if (!query || query.length < 2) return;
 
-  const statusMsg = await bot.sendMessage(chatId, `🔎 "${query}" qidirilmoqda...`);[cite: 4]
+  const statusMsg = await bot.sendMessage(chatId, `🔎 "${query}" qidirilmoqda...`);
 
-  const safeQuery = query.replace(/"/g, '');[cite: 4]
-  const cmd = `yt-dlp -4 --no-update --extractor-args "youtube:player_client=android" --flat-playlist --skip-download --socket-timeout 8 --print "%(id)s|||%(title)s" "ytsearch10:${safeQuery}"`;[cite: 4]
+  const safeQuery = query.replace(/"/g, '');
+  const cmd = `yt-dlp -4 --no-update --extractor-args "youtube:player_client=android" --flat-playlist --skip-download --socket-timeout 8 --print "%(id)s|||%(title)s" "ytsearch10:${safeQuery}"`;
 
-  exec(cmd, { maxBuffer: 1024 * 1024 * 20 }, async (error, stdout) => {[cite: 4]
-    if (error || !stdout.trim()) {[cite: 4]
-      bot.editMessageText(`❌ "${query}" bo'yicha hech narsa topilmadi.`, {[cite: 4]
-        chat_id: chatId,[cite: 4]
-        message_id: statusMsg.message_id[cite: 4]
-      }).catch(() => {});[cite: 4]
-      return;[cite: 4]
-    }[cite: 4]
+  exec(cmd, { maxBuffer: 1024 * 1024 * 20 }, async (error, stdout) => {
+    if (error || !stdout.trim()) {
+      bot.editMessageText(`❌ "${query}" bo'yicha hech narsa topilmadi.`, {
+        chat_id: chatId,
+        message_id: statusMsg.message_id
+      }).catch(() => {});
+      return;
+    }
 
-    const results = stdout.trim().split('\n').map(line => {[cite: 4]
-      const [id, ...titleParts] = line.split('|||');[cite: 4]
-      return { id: id.trim(), title: titleParts.join('|||').trim() || 'Nomsiz' };[cite: 4]
-    }).filter(r => r.id);[cite: 4]
+    const results = stdout.trim().split('\n').map(line => {
+      const [id, ...titleParts] = line.split('|||');
+      return { id: id.trim(), title: titleParts.join('|||').trim() || 'Nomsiz' };
+    }).filter(r => r.id);
 
-    if (results.length === 0) {[cite: 4]
-      bot.editMessageText(`❌ "${query}" bo'yicha hech narsa topilmadi.`, {[cite: 4]
-        chat_id: chatId,[cite: 4]
-        message_id: statusMsg.message_id[cite: 4]
-      }).catch(() => {});[cite: 4]
-      return;[cite: 4]
-    }[cite: 4]
+    if (results.length === 0) {
+      bot.editMessageText(`❌ "${query}" bo'yicha hech narsa topilmadi.`, {
+        chat_id: chatId,
+        message_id: statusMsg.message_id
+      }).catch(() => {});
+      return;
+    }
 
-    const searchId = crypto.randomBytes(4).toString('hex');[cite: 4]
-    SEARCH_CACHE.set(searchId, { results, timestamp: Date.now() });[cite: 4]
+    const searchId = crypto.randomBytes(4).toString('hex');
+    SEARCH_CACHE.set(searchId, { results, timestamp: Date.now() });
 
-    const listText = `🔎 *"${query}"* bo'yicha natijalar:\n\n` +[cite: 4]
-      results.map((r, i) => `${i + 1}. ${r.title}`).join('\n');[cite: 4]
+    const listText = `🔎 *"${query}"* bo'yicha natijalar:\n\n` +
+      results.map((r, i) => `${i + 1}. ${r.title}`).join('\n');
 
-    const buttons = results.map((r, i) => ({[cite: 4]
-      text: `🎵 ${i + 1}`,[cite: 4]
-      callback_data: `pick:${searchId}:${i}`[cite: 4]
-    }));[cite: 4]
-    const keyboard = [];[cite: 4]
-    for (let i = 0; i < buttons.length; i += 5) {[cite: 4]
-      keyboard.push(buttons.slice(i, i + 5));[cite: 4]
-    }[cite: 4]
+    const buttons = results.map((r, i) => ({
+      text: `🎵 ${i + 1}`,
+      callback_data: `pick:${searchId}:${i}`
+    }));
+    const keyboard = [];
+    for (let i = 0; i < buttons.length; i += 5) {
+      keyboard.push(buttons.slice(i, i + 5));
+    }
 
-    bot.editMessageText(listText, {[cite: 4]
-      chat_id: chatId,[cite: 4]
-      message_id: statusMsg.message_id,[cite: 4]
-      parse_mode: 'Markdown',[cite: 4]
-      reply_markup: { inline_keyboard: keyboard }[cite: 4]
-    }).catch(() => {});[cite: 4]
+    bot.editMessageText(listText, {
+      chat_id: chatId,
+      message_id: statusMsg.message_id,
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: keyboard }
+    }).catch(() => {});
 
-    prefetchAudio(results[0].id, results[0].title);[cite: 4]
-  });[cite: 4]
-}[cite: 4]
+    prefetchAudio(results[0].id, results[0].title);
+  });
+}
 
-bot.on('callback_query', async (query) => {[cite: 4]
-  const chatId = query.message.chat.id;[cite: 4]
-  const data = query.data || '';[cite: 4]
+bot.on('callback_query', async (query) => {
+  const chatId = query.message.chat.id;
+  const data = query.data || '';
 
-  if (!data.startsWith('dl:')) return;[cite: 4]
+  if (!data.startsWith('dl:')) return;
 
-  const [, linkId, quality] = data.split(':');[cite: 4]
-  const cached = LINK_CACHE.get(linkId);[cite: 4]
+  const [, linkId, quality] = data.split(':');
+  const cached = LINK_CACHE.get(linkId);
 
-  if (!cached) {[cite: 4]
-    bot.answerCallbackQuery(query.id, { text: '⏱ Havola muddati tugagan, qayta yuboring.', show_alert: true }).catch(() => {});[cite: 4]
-    return;[cite: 4]
-  }[cite: 4]
+  if (!cached) {
+    bot.answerCallbackQuery(query.id, { text: '⏱ Havola muddati tugagan, qayta yuboring.', show_alert: true }).catch(() => {});
+    return;
+  }
 
-  const textMap = {[cite: 4]
-    '360': '⏳ Video (360p) yuklanmoqda...',[cite: 4]
-    '480': '⏳ Video (480p) yuklanmoqda...',[cite: 4]
-    '720': '⏳ Video (720p) yuklanmoqda...',[cite: 4]
-    '1080': '⏳ Video (1080p) yuklanmoqda...',[cite: 4]
-    'audio': '⏳ Audio (MP3) yuklanmoqda...'[cite: 4]
-  };[cite: 4]
+  const textMap = {
+    '360': '⏳ Video (360p) yuklanmoqda...',
+    '480': '⏳ Video (480p) yuklanmoqda...',
+    '720': '⏳ Video (720p) yuklanmoqda...',
+    '1080': '⏳ Video (1080p) yuklanmoqda...',
+    'audio': '⏳ Audio (MP3) yuklanmoqda...'
+  };
 
-  bot.answerCallbackQuery(query.id, { text: textMap[quality] || '⏳ Yuklanmoqda...' }).catch(() => {});[cite: 4]
-  bot.deleteMessage(chatId, query.message.message_id).catch(() => {});[cite: 4]
+  bot.answerCallbackQuery(query.id, { text: textMap[quality] || '⏳ Yuklanmoqda...' }).catch(() => {});
+  bot.deleteMessage(chatId, query.message.message_id).catch(() => {});
 
-  await handleDownload(chatId, cached.url, quality);[cite: 4]
-});[cite: 4]
+  await handleDownload(chatId, cached.url, quality);
+});
 
-bot.on('callback_query', async (query) => {[cite: 4]
-  const chatId = query.message.chat.id;[cite: 4]
-  const data = query.data || '';[cite: 4]
+bot.on('callback_query', async (query) => {
+  const chatId = query.message.chat.id;
+  const data = query.data || '';
 
-  if (!data.startsWith('pick:')) return;[cite: 4]
+  if (!data.startsWith('pick:')) return;
 
-  const [, searchId, indexStr] = data.split(':');[cite: 4]
-  const cached = SEARCH_CACHE.get(searchId);[cite: 4]
+  const [, searchId, indexStr] = data.split(':');
+  const cached = SEARCH_CACHE.get(searchId);
 
-  if (!cached) {[cite: 4]
-    bot.answerCallbackQuery(query.id, { text: '⏱ Bu qidiruv muddati tugagan, qayta qidiring.', show_alert: true }).catch(() => {});[cite: 4]
-    return;[cite: 4]
-  }[cite: 4]
+  if (!cached) {
+    bot.answerCallbackQuery(query.id, { text: '⏱ Bu qidiruv muddati tugagan, qayta qidiring.', show_alert: true }).catch(() => {});
+    return;
+  }
 
-  const index = parseInt(indexStr, 10);[cite: 4]
-  const chosen = cached.results[index];[cite: 4]
-  if (!chosen) {[cite: 4]
-    bot.answerCallbackQuery(query.id, { text: '❌ Topilmadi.', show_alert: true }).catch(() => {});[cite: 4]
-    return;[cite: 4]
-  }[cite: 4]
+  const index = parseInt(indexStr, 10);
+  const chosen = cached.results[index];
+  if (!chosen) {
+    bot.answerCallbackQuery(query.id, { text: '❌ Topilmadi.', show_alert: true }).catch(() => {});
+    return;
+  }
 
-  const cachedFileId = AUDIO_CACHE[chosen.id];[cite: 4]
-  if (cachedFileId) {[cite: 4]
-    bot.answerCallbackQuery(query.id, { text: `✅ ${chosen.title}` }).catch(() => {});[cite: 4]
-    const statusMsg = await bot.sendMessage(chatId, `📤 "${chosen.title}" yuborilmoqda...`);[cite: 4]
-    try {[cite: 4]
-      await bot.sendAudio(chatId, cachedFileId);[cite: 4]
-      await bot.deleteMessage(chatId, statusMsg.message_id).catch(() => {});[cite: 4]
-      return;[cite: 4]
-    } catch (e) {[cite: 4]
-      delete AUDIO_CACHE[chosen.id];[cite: 4]
-      saveAudioCache();[cite: 4]
-    }[cite: 4]
-  }[cite: 4]
+  const cachedFileId = AUDIO_CACHE[chosen.id];
+  if (cachedFileId) {
+    bot.answerCallbackQuery(query.id, { text: `✅ ${chosen.title}` }).catch(() => {});
+    const statusMsg = await bot.sendMessage(chatId, `📤 "${chosen.title}" yuborilmoqda...`);
+    try {
+      await bot.sendAudio(chatId, cachedFileId);
+      await bot.deleteMessage(chatId, statusMsg.message_id).catch(() => {});
+      return;
+    } catch (e) {
+      delete AUDIO_CACHE[chosen.id];
+      saveAudioCache();
+    }
+  }
 
-  if (PENDING_PREFETCH.has(chosen.id)) {[cite: 4]
-    bot.answerCallbackQuery(query.id, { text: `⏳ ${chosen.title} deyarli tayyor...` }).catch(() => {});[cite: 4]
-    const statusMsg = await bot.sendMessage(chatId, `⏳ "${chosen.title}" tayyorlanmoqda...`);[cite: 4]
-    const fid = await PENDING_PREFETCH.get(chosen.id);[cite: 4]
-    if (fid) {[cite: 4]
-      try {[cite: 4]
-        await bot.sendAudio(chatId, fid);[cite: 4]
-        await bot.deleteMessage(chatId, statusMsg.message_id).catch(() => {});[cite: 4]
-        return;[cite: 4]
-      } catch (e) { }[cite: 4]
-    }[cite: 4]
-    return await downloadAndSendPick(chatId, chosen, statusMsg.message_id);[cite: 4]
-  }[cite: 4]
+  if (PENDING_PREFETCH.has(chosen.id)) {
+    bot.answerCallbackQuery(query.id, { text: `⏳ ${chosen.title} deyarli tayyor...` }).catch(() => {});
+    const statusMsg = await bot.sendMessage(chatId, `⏳ "${chosen.title}" tayyorlanmoqda...`);
+    const fid = await PENDING_PREFETCH.get(chosen.id);
+    if (fid) {
+      try {
+        await bot.sendAudio(chatId, fid);
+        await bot.deleteMessage(chatId, statusMsg.message_id).catch(() => {});
+        return;
+      } catch (e) { }
+    }
+    return await downloadAndSendPick(chatId, chosen, statusMsg.message_id);
+  }
 
-  bot.answerCallbackQuery(query.id, { text: `⏳ ${chosen.title} yuklanmoqda...` }).catch(() => {});[cite: 4]
+  bot.answerCallbackQuery(query.id, { text: `⏳ ${chosen.title} yuklanmoqda...` }).catch(() => {});
 
-  const statusMsg = await bot.sendMessage(chatId, `⏳ "${chosen.title}" yuklanmoqda...`);[cite: 4]
-  return await downloadAndSendPick(chatId, chosen, statusMsg.message_id);[cite: 4]
-});[cite: 4]
+  const statusMsg = await bot.sendMessage(chatId, `⏳ "${chosen.title}" yuklanmoqda...`);
+  return await downloadAndSendPick(chatId, chosen, statusMsg.message_id);
+});
 
-function downloadAndSendPick(chatId, chosen, statusMessageId) {[cite: 4]
-  const url = `https://www.youtube.com/watch?v=${chosen.id}`;[cite: 4]
-  const fileId = crypto.randomBytes(6).toString('hex');[cite: 4]
-  const outputTemplate = path.join(DOWNLOAD_DIR, `${fileId}.%(ext)s`);[cite: 4]
-  const flags = buildYtDlpFlags('YouTube');[cite: 4]
-  const cmd = `yt-dlp ${flags} -f "bestaudio/best" -x --audio-format mp3 -o "${outputTemplate}" "${url}"`;[cite: 4]
+function downloadAndSendPick(chatId, chosen, statusMessageId) {
+  const url = `https://www.youtube.com/watch?v=${chosen.id}`;
+  const fileId = crypto.randomBytes(6).toString('hex');
+  const outputTemplate = path.join(DOWNLOAD_DIR, `${fileId}.%(ext)s`);
+  const flags = buildYtDlpFlags('YouTube');
+  const cmd = `yt-dlp ${flags} -f "bestaudio/best" -x --audio-format mp3 -o "${outputTemplate}" "${url}"`;
 
-  const t0 = Date.now();[cite: 4]
-  return runAndSend(cmd, chatId, statusMessageId, fileId, true, `❌ "${chosen.title}" yuklab bo'lmadi.`, chosen.id, chosen.title, t0);[cite: 4]
-}[cite: 4]
+  const t0 = Date.now();
+  return runAndSend(cmd, chatId, statusMessageId, fileId, true, `❌ "${chosen.title}" yuklab bo'lmadi.`, chosen.id, chosen.title, t0);
+}
 
-function runAndSend(cmd, chatId, statusMessageId, fileId, audioOnly, errorText, cacheKey, cacheTitle, t0) {[cite: 4]
-  const startedAt = t0 || Date.now();[cite: 4]
+function runAndSend(cmd, chatId, statusMessageId, fileId, audioOnly, errorText, cacheKey, cacheTitle, t0) {
+  const startedAt = t0 || Date.now();
   
-  exec(cmd, { maxBuffer: 1024 * 1024 * 2048 }, async (error, stdout, stderr) => {[cite: 4]
-    if (error) {[cite: 4]
-      bot.editMessageText(errorText, {[cite: 4]
-        chat_id: chatId,[cite: 4]
-        message_id: statusMessageId[cite: 4]
-      }).catch(() => {});[cite: 4]
-      return;[cite: 4]
-    }[cite: 4]
+  exec(cmd, { maxBuffer: 1024 * 1024 * 2048 }, async (error, stdout, stderr) => {
+    if (error) {
+      bot.editMessageText(errorText, {
+        chat_id: chatId,
+        message_id: statusMessageId
+      }).catch(() => {});
+      return;
+    }
 
-    const files = fs.readdirSync(DOWNLOAD_DIR).filter(f => f.startsWith(fileId));[cite: 4]
-    if (files.length === 0) {[cite: 4]
-      bot.editMessageText("❌ Fayl topilmadi.", { chat_id: chatId, message_id: statusMessageId }).catch(() => {});[cite: 4]
-      return;[cite: 4]
-    }[cite: 4]
+    const files = fs.readdirSync(DOWNLOAD_DIR).filter(f => f.startsWith(fileId));
+    if (files.length === 0) {
+      bot.editMessageText("❌ Fayl topilmadi.", { chat_id: chatId, message_id: statusMessageId }).catch(() => {});
+      return;
+    }
 
-    const filePath = path.join(DOWNLOAD_DIR, files[0]);[cite: 4]
+    const filePath = path.join(DOWNLOAD_DIR, files[0]);
 
-    try {[cite: 4]
-      if (audioOnly) {[cite: 4]
-        const sent = await bot.sendAudio(chatId, filePath, cacheTitle ? { title: cacheTitle } : {});[cite: 4]
+    try {
+      if (audioOnly) {
+        const sent = await bot.sendAudio(chatId, filePath, cacheTitle ? { title: cacheTitle } : {});
         
-        if (cacheKey && sent && sent.audio && sent.audio.file_id) {[cite: 4]
-          AUDIO_CACHE[cacheKey] = sent.audio.file_id;[cite: 4]
-          saveAudioCache();[cite: 4]
-        }[cite: 4]
-      } else {[cite: 4]
-        await bot.sendVideo(chatId, filePath, {}, { filename: files[0], contentType: 'video/mp4' });[cite: 4]
-      }[cite: 4]
-      await bot.deleteMessage(chatId, statusMessageId).catch(() => {});[cite: 4]
-    } catch (sendErr) {[cite: 4]
-      bot.sendMessage(chatId, "❌ Faylni yuborishda xatolik yuz berdi (fayl hajmi oshib ketgan bo'lishi mumkin).");[cite: 4]
-    } finally {[cite: 4]
-      fs.unlink(filePath, () => {}); [cite: 4]
-    }[cite: 4]
-  });[cite: 4]
-}[cite: 4]
+        if (cacheKey && sent && sent.audio && sent.audio.file_id) {
+          AUDIO_CACHE[cacheKey] = sent.audio.file_id;
+          saveAudioCache();
+        }
+      } else {
+        await bot.sendVideo(chatId, filePath, {}, { filename: files[0], contentType: 'video/mp4' });
+      }
+      await bot.deleteMessage(chatId, statusMessageId).catch(() => {});
+    } catch (sendErr) {
+      bot.sendMessage(chatId, "❌ Faylni yuborishda xatolik yuz berdi (fayl hajmi oshib ketgan bo'lishi mumkin).");
+    } finally {
+      fs.unlink(filePath, () => {}); 
+    }
+  });
+}
 
-bot.on('polling_error', (error) => {});[cite: 4]
-console.log("🤖 Bot ishga tushdi...");[cite: 4]
+bot.on('polling_error', (error) => {});
+console.log("🤖 Bot ishga tushdi...");
