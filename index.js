@@ -14,13 +14,27 @@ if (!TOKEN) {
 
 const bot = new TelegramBot(TOKEN, { polling: true });
 
+// RENDER UCHUN UYG'OTUVCHI SERVER QISMI
 if (process.env.PORT) {
   const http = require('http');
+  const https = require('https'); // Ping uchun https qo'shildi
+
   http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('Bot ishlayapti ✅');
   }).listen(process.env.PORT, () => {
     console.log(`🌐 Health-check server ${process.env.PORT}-portda ishga tushdi`);
+    
+    // Har 14 daqiqada o'ziga ping yuborish (Uyg'oq tutish uchun)
+    setInterval(() => {
+      const RENDER_URL = 'https://telegram-video-bot-k1xp.onrender.com/'; 
+      
+      https.get(RENDER_URL, (res) => {
+        console.log(`⏱ Uyg'otish pingi yuborildi: ${res.statusCode}`);
+      }).on('error', (e) => {
+        console.error(`Ping xatosi: ${e.message}`);
+      });
+    }, 14 * 60 * 1000); // 14 daqiqa
   });
 }
 
@@ -108,7 +122,6 @@ bot.on('message', async (msg) => {
     const linkId = crypto.randomBytes(4).toString('hex');
     LINK_CACHE.set(linkId, { url, timestamp: Date.now() });
 
-    // RASMDA KO'RSATILGAN MENYU QISMI
     bot.sendMessage(chatId, `Formatni tanlang:`, {
       reply_markup: {
         inline_keyboard: [
@@ -198,7 +211,6 @@ function prefetchAudio(videoId, title) {
   PENDING_PREFETCH.set(videoId, promise);
 }
 
-// SIFAT BO'YICHA YUKLASH QISMI
 async function handleDownload(chatId, url, quality) {
   const platform = detectPlatform(url);
   if (!platform) {
@@ -217,7 +229,6 @@ async function handleDownload(chatId, url, quality) {
   if (isAudio) {
     formatCmd = `-f "bestaudio/best" -x --audio-format mp3`; 
   } else {
-    // Tanlangan sifatga (masalan: 720) mos keladigan yoki undan kichikroq bo'lgan eng yaxshi sifatni topadi
     formatCmd = `-f "bestvideo[height<=${quality}][ext=mp4]+bestaudio[ext=m4a]/best[height<=${quality}][ext=mp4]/best" --merge-output-format mp4`;
   }
 
@@ -291,7 +302,6 @@ async function handleMusicSearch(chatId, query) {
   });
 }
 
-// HAVOLA BO'YICHA TUGMALAR BOSILGANDA
 bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
   const data = query.data || '';
