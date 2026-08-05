@@ -227,28 +227,25 @@ async function handleDownload(chatId, url, quality) {
 
   let formatCmd = '';
   if (isAudio) {
-    formatCmd = `-f "bestaudio/best" -x --audio-format mp3`; 
+    formatCmd = `-f "bestaudio/best" -x --audio-format mp3 --print-json`; 
   } else {
     formatCmd = `-f "bestvideo[height<=${quality}][ext=mp4]+bestaudio[ext=m4a]/best[height<=${quality}][ext=mp4]/best" --merge-output-format mp4`;
   }
 
   const cmd = `yt-dlp ${flags} ${formatCmd} -o "${outputTemplate}" "${url}"`;
 
-  // Agar audio bo'lsa, uni avval kanalga tashlab keshlaydigan funksiyaga yo'naltiramiz
   if (isAudio) {
     const t0 = Date.now();
-    // YouTube video ID ni havoladan ajratib olishga harakat qilamiz
     let videoId = null;
     const ytMatch = url.match(/(?:v=|\/)([0-9A-Za-z_-]{11}).*/);
     if (ytMatch) videoId = ytMatch[1];
 
     return runAndSendAudioWithCache(cmd, chatId, statusMsg.message_id, fileId, videoId, t0);
   } else {
-    return runAndSend(cmd, chatId, statusMessageId = statusMsg.message_id, fileId, false, `❌ Videoni yuklab bo'lmadi.`);
+    return runAndSend(cmd, chatId, statusMsg.message_id, fileId, false, `❌ Videoni yuklab bo'lmadi.`);
   }
 }
 
-// Havola orqali yuklangan audioni kanalga keshlab jo'natish uchun maxsus funksiya
 function runAndSendAudioWithCache(cmd, chatId, statusMessageId, fileId, videoId, t0) {
   const startedAt = t0 || Date.now();
 
@@ -257,6 +254,19 @@ function runAndSendAudioWithCache(cmd, chatId, statusMessageId, fileId, videoId,
       bot.editMessageText("❌ Audio yuklab bo'lmadi.", { chat_id: chatId, message_id: statusMessageId }).catch(() => {});
       return;
     }
+
+    // JSON orqali video nomini aniqlash
+    let songTitle = "Musiqa";
+    try {
+      const lines = stdout.trim().split('\n');
+      for (const line of lines) {
+        if (line.startsWith('{')) {
+          const info = JSON.parse(line);
+          if (info.title) songTitle = info.title;
+          break;
+        }
+      }
+    } catch (e) {}
 
     const files = fs.readdirSync(DOWNLOAD_DIR).filter(f => f.startsWith(fileId));
     if (files.length === 0) {
@@ -267,24 +277,19 @@ function runAndSendAudioWithCache(cmd, chatId, statusMessageId, fileId, videoId,
     const filePath = path.join(DOWNLOAD_DIR, files[0]);
 
     try {
-      // 1. Avval ombor kanaliga yuboramiz va file_id olamiz
       let sentToStorage = null;
       if (STORAGE_CHAT_ID) {
-        sentToStorage = await bot.sendAudio(STORAGE_CHAT_ID, filePath);
+        sentToStorage = await bot.sendAudio(STORAGE_CHAT_ID, filePath, { title: songTitle, performer: '' });
       }
 
-      // 2. Foydalanuvchiga yuboramiz
       if (sentToStorage && sentToStorage.audio && sentToStorage.audio.file_id) {
         await bot.sendAudio(chatId, sentToStorage.audio.file_id);
-        
-        // Agar YouTube bo'lsa, keshga yozib qo'yamiz
         if (videoId) {
           AUDIO_CACHE[videoId] = sentToStorage.audio.file_id;
           saveAudioCache();
         }
       } else {
-        // Agar omborga yuborishda muammo bo'lsa, to'g'ridan-to'g'ri fayldan yuboramiz
-        await bot.sendAudio(chatId, filePath);
+        await bot.sendAudio(chatId, filePath, { title: songTitle });
       }
 
       await bot.deleteMessage(chatId, statusMessageId).catch(() => {});
@@ -415,7 +420,7 @@ bot.on('callback_query', async (query) => {
     bot.answerCallbackQuery(query.id, { text: `✅ ${chosen.title}` }).catch(() => {});
     const statusMsg = await bot.sendMessage(chatId, `📤 "${chosen.title}" yuborilmoqda...`);
     try {
-      await bot.sendAudio(chatId, cachedFileId);
+      await bot.sendAudio(chatId, cachedFileId, { title: chosen.title });
       await bot.deleteMessage(chatId, statusMsg.message_id).catch(() => {});
       return;
     } catch (e) {
@@ -430,7 +435,7 @@ bot.on('callback_query', async (query) => {
     const fid = await PENDING_PREFETCH.get(chosen.id);
     if (fid) {
       try {
-        await bot.sendAudio(chatId, fid);
+        await bot.sendAudio(chatId, fid, { title: chosen.title });
         await bot.deleteMessage(chatId, statusMsg.message_id).catch(() => {});
         return;
       } catch (e) { }
@@ -475,17 +480,17 @@ function runAndSendPickAudio(cmd, chatId, statusMessageId, fileId, cacheKey, cac
     try {
       let sentToStorage = null;
       if (STORAGE_CHAT_ID) {
-        sentToStorage = await bot.sendAudio(STORAGE_CHAT_ID, filePath, cacheTitle ? { title: cacheTitle } : {});
+        sentToStorage = await bot.sendAudio(STORAGE_CHAT_ID, filePath, { title: cacheTitle });
       }
 
       if (sentToStorage && sentToStorage.audio && sentToStorage.audio.file_id) {
-        await bot.sendAudio(chatId, sentToStorage.audio.file_id);
+        await bot.sendAudio(chatId, sentToStorage.audio.file_id, { title: cacheTitle });
         if (cacheKey) {
           AUDIO_CACHE[cacheKey] = sentToStorage.audio.file_id;
           saveAudioCache();
         }
       } else {
-        await bot.sendAudio(chatId, filePath, cacheTitle ? { title: cacheTitle } : {});
+        await bot.sendAudio(chatId, filePath, { title: cacheTitle });
       }
 
       await bot.deleteMessage(chatId, statusMessageId).catch(() => {});
