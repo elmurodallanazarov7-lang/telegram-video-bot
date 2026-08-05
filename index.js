@@ -85,10 +85,11 @@ async function sendFile(method, chatId, filePath, filename, fields = {}) {
   const bytes = await fsp.readFile(filePath);
   form.append(method === "sendAudio" ? "audio" : "video", new Blob([bytes]), filename);
 
+  // Kutish vaqtini 120000 dan 300000 (5 daqiqa) ga oshirdik. Fayl katta bo'lsa uzilib qolmaydi.
   const response = await fetch(`${telegram}/${method}`, {
     method: "POST",
     body: form,
-    signal: AbortSignal.timeout(120000),
+    signal: AbortSignal.timeout(300000),
   });
   const payload = await response.json();
   if (!response.ok || !payload.ok) {
@@ -138,8 +139,6 @@ function prepareCookies() {
 
   const target = path.join("/tmp", `yt-dlp-cookies-${process.pid}.txt`);
   try {
-    // Render Secret Files are read-only. yt-dlp may refresh cookie expiry data,
-    // so always give it a writable copy instead of the mounted secret itself.
     fs.copyFileSync(source, target);
     fs.chmodSync(target, 0o600);
     runtimeCookiesPath = target;
@@ -149,11 +148,6 @@ function prepareCookies() {
   }
 }
 
-// "web" va "web_safari" 2026-yildan beri YouTube SABR streaming'ni
-// majburlaydi va PO Token bo'lmasa faqat rasm(thumbnail) formatlarini
-// qaytaradi ("Requested format is not available"). Shu sabab ular
-// ro'yxatdan olib tashlangan; tv/android/ios ko'pincha PO Tokensiz ham
-// oddiy (progressive) formatlarni beradi.
 const YT_CLIENTS = ["tv", "android", "ios", "tv_embedded"];
 
 function ytArgs(url, clientOverride) {
@@ -164,6 +158,9 @@ function ytArgs(url, clientOverride) {
     "--retries", "2",
     "--fragment-retries", "2",
     "--concurrent-fragments", "4",
+    // aria2 o'rnatilganligi sababli, yuklashni tezlashtirish uchun parametrlar qo'shildi:
+    "--downloader", "aria2c",
+    "--downloader-args", "aria2c:-x 16 -s 16 -k 1M",
   ];
   if (runtimeCookiesPath) args.push("--cookies", runtimeCookiesPath);
   if (detectPlatform(url) === "YouTube") {
@@ -273,13 +270,13 @@ function linkKeyboard(id) {
 
 async function downloadAndSend(chatId, url, kind, height, title) {
   if (activeChats.has(chatId)) {
-    await tg("sendMessage", { chat_id: chatId, text: "Bu chatda boshqa yuklash davom etmoqda." });
+    await tg("sendMessage", { chat_id: chatId, text: "Bu chatda boshqa yuklash davom etmoqda. Iltimos kuting." });
     return;
   }
   activeChats.add(chatId);
   const status = await tg("sendMessage", {
     chat_id: chatId,
-    text: kind === "audio" ? "Audio yuklanmoqda..." : `${height || 720}p video yuklanmoqda...`,
+    text: kind === "audio" ? "🎵 Audio yuklanmoqda..." : `🎥 ${height || 720}p video yuklanmoqda...`,
   });
   let filePath = null;
   try {
@@ -300,7 +297,7 @@ async function downloadAndSend(chatId, url, kind, height, title) {
   } catch (error) {
     console.error("Yuklash xatosi:", error.message);
     const message = error.message === "FILE_TOO_LARGE"
-      ? "Fayl 49 MB dan katta. Pastroq sifatni tanlang."
+      ? "Fayl 49 MB dan katta. Telegram cheklovlari tufayli pastroq sifatni tanlang."
       : "Yuklab bo‘lmadi. Video yopiq, login talab qiladigan yoki vaqtincha mavjud emas bo‘lishi mumkin.";
     await tg("editMessageText", {
       chat_id: chatId, message_id: status.message_id, text: message,
@@ -314,7 +311,7 @@ async function downloadAndSend(chatId, url, kind, height, title) {
 async function handleSearch(chatId, query) {
   if (!query || query.length < 2 || query.length > 120) return;
   const status = await tg("sendMessage", {
-    chat_id: chatId, text: `"${cleanTitle(query)}" qidirilmoqda...`,
+    chat_id: chatId, text: `🔍 "${cleanTitle(query)}" qidirilmoqda...`,
   });
   try {
     const { stdout } = await run("yt-dlp", [
@@ -357,14 +354,14 @@ async function handleMessage(message) {
   if (/^\/start(?:@\w+)?$/i.test(text)) {
     await tg("sendMessage", {
       chat_id: chatId,
-      text: "Salom!\n\nInstagram, TikTok yoki YouTube havolasini yuboring. Video sifati yoki Audio MP3 formatini tanlang.\n\nQo‘shiq nomini yuborsangiz, YouTube’dan qidiraman.\n/help — yordam",
+      text: "Salom! Men tezkor media yuklovchi botman.\n\nInstagram, TikTok yoki YouTube havolasini yuboring. Qo‘shiq nomini yuborsangiz, YouTube’dan qidirib beraman.",
     });
     return;
   }
   if (/^\/help(?:@\w+)?$/i.test(text)) {
     await tg("sendMessage", {
       chat_id: chatId,
-      text: "1. Instagram, TikTok yoki YouTube havolasini yuboring.\n2. Video sifatini yoki Audio MP3 tugmasini bosing.\n3. Qidiruv uchun qo‘shiq nomini yozing.\n\nTelegram 49 MB dan katta fayllarni qabul qilmaydi.",
+      text: "1. Havola yuboring (Insta, TikTok, YT).\n2. Sifatini tanlang.\n3. Qo'shiq qidirish uchun shunchaki nomini yozing.",
     });
     return;
   }
@@ -417,7 +414,7 @@ async function handleCallback(query) {
       });
       return;
     }
-    await tg("answerCallbackQuery", { callback_query_id: query.id, text: "Yuklash boshlandi..." });
+    await tg("answerCallbackQuery", { callback_query_id: query.id, text: "Yuklash boshlandi, biroz kuting..." });
     const audio = kind === "audio";
     return downloadAndSend(
       chatId, cached.url, audio ? "audio" : "video",
@@ -481,6 +478,18 @@ async function poll() {
 async function start() {
   await fsp.mkdir(DOWNLOAD_DIR, { recursive: true });
   prepareCookies();
+
+  // Xotira (Memory leak) to'lib ketishini oldini olish uchun keshni avtomatik tozalash tizimi
+  setInterval(() => {
+    const now = Date.now();
+    for (const [id, data] of links.entries()) {
+      if (now - data.time > CACHE_TTL) links.delete(id);
+    }
+    for (const [id, data] of searches.entries()) {
+      if (now - data.time > CACHE_TTL) searches.delete(id);
+    }
+  }, 5 * 60 * 1000);
+
   try {
     await execFileAsync("yt-dlp", ["--version"]);
     await execFileAsync("ffmpeg", ["-version"]);
@@ -492,7 +501,7 @@ async function start() {
   await tg("deleteWebhook", { drop_pending_updates: false }).catch((error) => {
     console.warn("Webhook tozalanmadi:", error.message);
   });
-  console.log("Telegram downloader ishga tushdi.");
+  console.log("Telegram downloader tezlashtirilgan rejimda ishga tushdi.");
   console.log(`Health server: port ${PORT}`);
   poll();
 }
