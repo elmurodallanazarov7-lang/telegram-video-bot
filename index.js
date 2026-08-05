@@ -12,6 +12,11 @@ const execFileAsync = promisify(execFile);
 const TOKEN = process.env.BOT_TOKEN;
 const PORT = Number(process.env.PORT || 10000);
 const DOWNLOAD_DIR = path.resolve(process.env.DOWNLOAD_DIR || "./downloads");
+
+// YANGI: Yopiq kanal ID'si (Masalan: -1001234567890). .env faylga DUMP_CHANNEL qo'shing.
+const DUMP_CHANNEL = process.env.DUMP_CHANNEL; 
+const DB_FILE = path.join(__dirname, "database.json");
+
 const MAX_FILE_BYTES = 49 * 1024 * 1024;
 const CACHE_TTL = 30 * 60 * 1000;
 let runtimeCookiesPath = null;
@@ -28,6 +33,20 @@ const activeChats = new Set();
 let updateOffset = 0;
 let polling = true;
 let conflictLoggedAt = 0;
+
+// YANGI: Baza tizimini ishga tushirish
+let fileDB = {};
+if (fs.existsSync(DB_FILE)) {
+  try {
+    fileDB = JSON.parse(fs.readFileSync(DB_FILE, "utf8"));
+  } catch (err) {
+    console.error("Baza (database.json) o'qishda xatolik:", err);
+  }
+}
+
+function saveDB() {
+  fs.writeFileSync(DB_FILE, JSON.stringify(fileDB, null, 2));
+}
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -85,11 +104,10 @@ async function sendFile(method, chatId, filePath, filename, fields = {}) {
   const bytes = await fsp.readFile(filePath);
   form.append(method === "sendAudio" ? "audio" : "video", new Blob([bytes]), filename);
 
-  // Kutish vaqtini 120000 dan 300000 (5 daqiqa) ga oshirdik. Fayl katta bo'lsa uzilib qolmaydi.
   const response = await fetch(`${telegram}/${method}`, {
     method: "POST",
     body: form,
-    signal: AbortSignal.timeout(300000),
+    signal: AbortSignal.timeout(300000), // 5 daqiqa
   });
   const payload = await response.json();
   if (!response.ok || !payload.ok) {
@@ -142,31 +160,31 @@ function prepareCookies() {
     fs.copyFileSync(source, target);
     fs.chmodSync(target, 0o600);
     runtimeCookiesPath = target;
-    console.log("Cookies fayli yoziladigan vaqtinchalik nusxaga tayyorlandi.");
+    console.log("Cookies fayli vaqtinchalik nusxaga tayyorlandi.");
   } catch (error) {
     console.warn("Cookies fayli nusxalanmadi:", error.message);
   }
 }
 
-const YT_CLIENTS = ["tv", "android", "ios", "tv_embedded"];
+// YANGI: Format xatosini aylanib o'tish uchun mijozlarni o'zgartirdik (android, ios, mweb qo'shildi)
+const YT_CLIENTS = ["android", "ios", "mweb", "tv"];
 
 function ytArgs(url, clientOverride) {
   const args = [
     "--no-warnings",
     "--no-playlist",
     "--socket-timeout", "20",
-    "--retries", "2",
-    "--fragment-retries", "2",
-    "--concurrent-fragments", "4",
-    // aria2 o'rnatilganligi sababli, yuklashni tezlashtirish uchun parametrlar qo'shildi:
+    "--retries", "3",
+    "--fragment-retries", "3",
     "--downloader", "aria2c",
     "--downloader-args", "aria2c:-x 16 -s 16 -k 1M",
   ];
   if (runtimeCookiesPath) args.push("--cookies", runtimeCookiesPath);
   if (detectPlatform(url) === "YouTube") {
+    // "Requested format is not available" xatosiga qarshi:
     args.push(
       "--extractor-args",
-      `youtube:player_client=${clientOverride || YT_CLIENTS[0]};formats=missing_pot`,
+      `youtube:player_client=${clientOverride || "android,ios,mweb"}`
     );
   }
   return args;
@@ -234,7 +252,7 @@ async function download(url, kind, height) {
         }
       }
       lastError = null;
-      break;
+      break; // Muvaffaqiyatli yuklansa sikldan chiqadi
     } catch (error) {
       lastError = error;
       console.warn(`Yuklash urinishi muvaffaqiyatsiz (client=${client || "default"}):`, error.message);
@@ -273,32 +291,93 @@ async function downloadAndSend(chatId, url, kind, height, title) {
     await tg("sendMessage", { chat_id: chatId, text: "Bu chatda boshqa yuklash davom etmoqda. Iltimos kuting." });
     return;
   }
+  
+  // YANGI: Kesh (Database) tizimi. Bir marta yuklangan narsani bazadan izlaydi.
+  const dbKey = `${url}_${kind}_${height || "default"}`;
+  
+  if (fileDB[dbKey]) {
+    try {
+      await tg(kind === "audio" ? "sendAudio" : "sendVideo", {
+        chat_id: chatId,
+        [kind === "audio" ? "audio" : "video"]: fileDB[dbKey],
+        caption: cleanTitle(title || ""),
+      });
+      return; // Tayyor fayl jo'natildi, yuklash shart emas!
+    } catch (err) {
+      console.warn("Keshdagi file_id ishlamadi, qayta yuklanadi.");
+      delete fileDB[dbKey]; // Xato bo'lsa bazadan o'chirib, qayta yuklaydi
+      saveDB();
+    }
+  }
+
   activeChats.add(chatId);
   const status = await tg("sendMessage", {
     chat_id: chatId,
     text: kind === "audio" ? "🎵 Audio yuklanmoqda..." : `🎥 ${height || 720}p video yuklanmoqda...`,
   });
+
   let filePath = null;
   try {
     filePath = await download(url, kind, height);
     const filename = path.basename(filePath);
-    if (kind === "audio") {
-      await sendFile("sendAudio", chatId, filePath, filename, {
-        title: cleanTitle(title || "YouTube audio"),
-        performer: "Media Downloader",
-      });
-    } else {
-      await sendFile("sendVideo", chatId, filePath, filename, {
-        supports_streaming: "true",
-        caption: cleanTitle(title || ""),
-      });
+    
+    let fileIdToSave = null;
+    let sentMessage = null;
+
+    // Agar DUMP_CHANNEL kiritilgan bo'lsa, avval bazaga jo'natib ID olamiz
+    if (DUMP_CHANNEL) {
+      try {
+        if (kind === "audio") {
+          sentMessage = await sendFile("sendAudio", DUMP_CHANNEL, filePath, filename, {
+            title: cleanTitle(title || "YouTube audio"),
+            performer: "Media Downloader",
+          });
+          if (sentMessage.audio) fileIdToSave = sentMessage.audio.file_id;
+        } else {
+          sentMessage = await sendFile("sendVideo", DUMP_CHANNEL, filePath, filename, {
+            supports_streaming: "true",
+            caption: cleanTitle(title || ""),
+          });
+          if (sentMessage.video) fileIdToSave = sentMessage.video.file_id;
+        }
+        
+        // Kanalga tushgan tayyor faylni Endi Foydalanuvchiga Forward qilamiz (tezkor)
+        if (fileIdToSave) {
+          fileDB[dbKey] = fileIdToSave;
+          saveDB(); // Bazaga saqlaymiz
+
+          await tg(kind === "audio" ? "sendAudio" : "sendVideo", {
+            chat_id: chatId,
+            [kind === "audio" ? "audio" : "video"]: fileIdToSave,
+            caption: cleanTitle(title || ""),
+          });
+        }
+      } catch (e) {
+        console.error("Dump kanalga yuborishda xatolik:", e.message);
+      }
     }
+
+    // Agar kanalga yuborilmagan bo'lsa (yoki DUMP_CHANNEL yo'q bo'lsa), to'g'ridan-to'g'ri userga yuboramiz
+    if (!fileIdToSave) {
+      if (kind === "audio") {
+        await sendFile("sendAudio", chatId, filePath, filename, {
+          title: cleanTitle(title || "YouTube audio"),
+          performer: "Media Downloader",
+        });
+      } else {
+        await sendFile("sendVideo", chatId, filePath, filename, {
+          supports_streaming: "true",
+          caption: cleanTitle(title || ""),
+        });
+      }
+    }
+
     await tg("deleteMessage", { chat_id: chatId, message_id: status.message_id }).catch(() => {});
   } catch (error) {
     console.error("Yuklash xatosi:", error.message);
     const message = error.message === "FILE_TOO_LARGE"
       ? "Fayl 49 MB dan katta. Telegram cheklovlari tufayli pastroq sifatni tanlang."
-      : "Yuklab bo‘lmadi. Video yopiq, login talab qiladigan yoki vaqtincha mavjud emas bo‘lishi mumkin.";
+      : "Yuklab bo‘lmadi. Format yo'q yoki himoyalangan video bo'lishi mumkin.";
     await tg("editMessageText", {
       chat_id: chatId, message_id: status.message_id, text: message,
     }).catch(() => {});
@@ -354,7 +433,7 @@ async function handleMessage(message) {
   if (/^\/start(?:@\w+)?$/i.test(text)) {
     await tg("sendMessage", {
       chat_id: chatId,
-      text: "Salom! Men tezkor media yuklovchi botman.\n\nInstagram, TikTok yoki YouTube havolasini yuboring. Qo‘shiq nomini yuborsangiz, YouTube’dan qidirib beraman.",
+      text: "Salom! Men tezkor media yuklovchi botman.\n\nInstagram, TikTok yoki YouTube havolasini yuboring.",
     });
     return;
   }
@@ -375,7 +454,7 @@ async function handleMessage(message) {
     if (!platform) {
       await tg("sendMessage", {
         chat_id: chatId,
-        text: "Bu havola qo‘llab-quvvatlanmaydi. Instagram, TikTok yoki YouTube havolasini yuboring.",
+        text: "Bu havola qo‘llab-quvvatlanmaydi.",
       });
       return;
     }
@@ -414,7 +493,7 @@ async function handleCallback(query) {
       });
       return;
     }
-    await tg("answerCallbackQuery", { callback_query_id: query.id, text: "Yuklash boshlandi, biroz kuting..." });
+    await tg("answerCallbackQuery", { callback_query_id: query.id, text: "Tayyorlanmoqda, kuting..." });
     const audio = kind === "audio";
     return downloadAndSend(
       chatId, cached.url, audio ? "audio" : "video",
@@ -464,11 +543,10 @@ async function poll() {
       if (error.code === 409) {
         if (Date.now() - conflictLoggedAt > 60000) {
           conflictLoggedAt = Date.now();
-          console.error("409 Conflict: BOT_TOKEN bilan boshqa bot nusxasi ham ishlayapti. Eski Render/Docker service’ni to‘xtating.");
+          console.error("409 Conflict: Boshqa bot nusxasi ishlayapti.");
         }
         await sleep(15000);
       } else {
-        console.error("Polling xatosi:", error.message);
         await sleep(3000);
       }
     }
@@ -479,7 +557,6 @@ async function start() {
   await fsp.mkdir(DOWNLOAD_DIR, { recursive: true });
   prepareCookies();
 
-  // Xotira (Memory leak) to'lib ketishini oldini olish uchun keshni avtomatik tozalash tizimi
   setInterval(() => {
     const now = Date.now();
     for (const [id, data] of links.entries()) {
@@ -498,11 +575,8 @@ async function start() {
     process.exit(1);
   }
 
-  await tg("deleteWebhook", { drop_pending_updates: false }).catch((error) => {
-    console.warn("Webhook tozalanmadi:", error.message);
-  });
-  console.log("Telegram downloader tezlashtirilgan rejimda ishga tushdi.");
-  console.log(`Health server: port ${PORT}`);
+  await tg("deleteWebhook", { drop_pending_updates: false }).catch(() => {});
+  console.log("Telegram downloader tezlashtirilgan rejimda (CASH tizimi bilan) ishga tushdi.");
   poll();
 }
 
