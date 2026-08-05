@@ -119,6 +119,13 @@ bot.on('message', async (msg) => {
       return;
     }
 
+    // AGAR INSTAGRAM YOKI TIKTOK BO'LSA - DARROV VIDEONI YUKLAYDI
+    if (platform === 'Instagram' || platform === 'TikTok') {
+      await handleDownload(chatId, url, 'video');
+      return;
+    }
+
+    // YOUTUBE BO'LSA - FORMAT MENYUSINI CHIQARADI
     const linkId = crypto.randomBytes(4).toString('hex');
     LINK_CACHE.set(linkId, { url, timestamp: Date.now() });
 
@@ -220,7 +227,6 @@ async function handleDownload(chatId, url, quality) {
 
   const isAudio = quality === 'audio';
 
-  // Agar audio bo'lsa, avval keshni (bazani) tekshiramiz
   let videoId = null;
   if (platform === 'YouTube') {
     const ytMatch = url.match(/(?:v=|\/)([0-9A-Za-z_-]{11}).*/);
@@ -248,6 +254,8 @@ async function handleDownload(chatId, url, quality) {
   let formatCmd = '';
   if (isAudio) {
     formatCmd = `-f "bestaudio/best" -x --audio-format mp3 --print-json`; 
+  } else if (platform === 'Instagram' || platform === 'TikTok') {
+    formatCmd = `-f "best/bestvideo+bestaudio" --merge-output-format mp4`;
   } else {
     formatCmd = `-f "bestvideo[height<=${quality}][ext=mp4]+bestaudio[ext=m4a]/best[height<=${quality}][ext=mp4]/best" --merge-output-format mp4`;
   }
