@@ -12,9 +12,6 @@ if (!TOKEN) {
   process.exit(1);
 }
 
-// DIQQAT: 2 GB fayl yuklash uchun siz Local Telegram Bot API server ishlatishingiz shart.
-// O'shanda kodni quyidagicha o'zgartirasiz (misol uchun):
-// const bot = new TelegramBot(TOKEN, { polling: true, baseApiUrl: 'http://localhost:8081' });
 const bot = new TelegramBot(TOKEN, { polling: true });
 
 if (process.env.PORT) {
@@ -61,7 +58,7 @@ bot.onText(/^\/start/, (msg) => {
   bot.sendMessage(chatId,
     "Salom! 👋\n\n" +
     "Men Instagram, TikTok va YouTube'dan video va musiqa yuklab beraman.\n\n" +
-    "📥 *Video/audio yuklash:* shunchaki havolani yuboring — Video yoki Audio tugmasini tanlaysiz\n" +
+    "📥 *Video/audio yuklash:* shunchaki havolani yuboring.\n" +
     "🔎 *Qo'shiq nomi bilan qidirish:* shunchaki qo'shiq/ijrochi nomini yozing\n\n" +
     "Masalan:\n" +
     "`https://www.tiktok.com/@user/video/123456`\n" +
@@ -74,16 +71,14 @@ bot.onText(/^\/help/, (msg) => {
   bot.sendMessage(msg.chat.id,
     "🤖 Buyruqlar:\n" +
     "/start - Botni ishga tushirish\n" +
-    "/help - Yordam\n\n" +
-    "📥 Video havolasini yuboring — Video yoki Audio tugmasini tanlaysiz.\n" +
-    "🔎 Havola o'rniga qo'shiq nomini yozsangiz, bot uni o'zi qidirib topib beradi."
+    "/help - Yordam"
   );
 });
 
 bot.onText(/^\/mp3\s+(.+)/i, async (msg, match) => {
   const chatId = msg.chat.id;
   const url = match[1].trim();
-  await handleDownload(chatId, url, true);
+  await handleDownload(chatId, url, 'audio');
 });
 
 const LINK_CACHE = new Map();
@@ -113,12 +108,22 @@ bot.on('message', async (msg) => {
     const linkId = crypto.randomBytes(4).toString('hex');
     LINK_CACHE.set(linkId, { url, timestamp: Date.now() });
 
-    bot.sendMessage(chatId, `${platform} havolasi aniqlandi. Nimani yuklab olay?`, {
+    // RASMDA KO'RSATILGAN MENYU QISMI
+    bot.sendMessage(chatId, `Formatni tanlang:`, {
       reply_markup: {
-        inline_keyboard: [[
-          { text: '🎥 Video', callback_data: `dl:${linkId}:video`, style: 'primary' },
-          { text: '🎵 Audio', callback_data: `dl:${linkId}:audio`, style: 'success' }
-        ]]
+        inline_keyboard: [
+          [
+            { text: 'Video 360p', callback_data: `dl:${linkId}:360` },
+            { text: 'Video 480p', callback_data: `dl:${linkId}:480` }
+          ],
+          [
+            { text: 'Video 720p', callback_data: `dl:${linkId}:720` },
+            { text: 'Video 1080p', callback_data: `dl:${linkId}:1080` }
+          ],
+          [
+            { text: 'Audio MP3', callback_data: `dl:${linkId}:audio` }
+          ]
+        ]
       }
     });
   } else {
@@ -134,7 +139,6 @@ function getCookiesPath() {
     fs.copyFileSync(secretPath, WRITABLE_COOKIES_PATH);
     return WRITABLE_COOKIES_PATH;
   } catch (e) {
-    console.error('cookies.txt nusxalashda xatolik:', e);
     return secretPath;
   }
 }
@@ -161,18 +165,15 @@ function prefetchAudio(videoId, title) {
     const fileKey = crypto.randomBytes(6).toString('hex');
     const outputTemplate = path.join(DOWNLOAD_DIR, `${fileKey}.%(ext)s`);
     const flags = buildYtDlpFlags('YouTube');
-    const cmd = `yt-dlp ${flags} -f "bestaudio[ext=m4a]/bestaudio" -x --audio-format m4a -o "${outputTemplate}" "${url}"`;
+    const cmd = `yt-dlp ${flags} -f "bestaudio/best" -x --audio-format mp3 -o "${outputTemplate}" "${url}"`;
 
-    // Bufer hajmi 2GB qilib o'zgartirildi (2048 MB)
     exec(cmd, { maxBuffer: 1024 * 1024 * 2048 }, async (error, stdout, stderr) => {
       if (error) {
-        console.error(`[prefetch] "${title}" yuklashda xatolik:`, stderr || error.message);
         resolve(null);
         return;
       }
       const files = fs.readdirSync(DOWNLOAD_DIR).filter(f => f.startsWith(fileKey));
       if (files.length === 0) {
-        console.error(`[prefetch] "${title}" — fayl topilmadi`);
         resolve(null);
         return;
       }
@@ -182,14 +183,11 @@ function prefetchAudio(videoId, title) {
         if (sent && sent.audio && sent.audio.file_id) {
           AUDIO_CACHE[videoId] = sent.audio.file_id;
           saveAudioCache();
-          console.log(`[prefetch] "${title}" omborga saqlandi ✅`);
           resolve(sent.audio.file_id);
         } else {
-          console.error(`[prefetch] "${title}" — sendAudio javobida file_id topilmadi`);
           resolve(null);
         }
       } catch (e) {
-        console.error(`[prefetch] "${title}" — STORAGE_CHAT_ID'ga yuborishda xatolik:`, e.message);
         resolve(null);
       } finally {
         fs.unlink(filePath, () => {});
@@ -200,24 +198,32 @@ function prefetchAudio(videoId, title) {
   PENDING_PREFETCH.set(videoId, promise);
 }
 
-async function handleDownload(chatId, url, audioOnly) {
+// SIFAT BO'YICHA YUKLASH QISMI
+async function handleDownload(chatId, url, quality) {
   const platform = detectPlatform(url);
   if (!platform) {
-    bot.sendMessage(chatId, "❌ Bu havolani tanib bo'lmadi. Instagram, TikTok yoki YouTube havolasini yuboring.");
+    bot.sendMessage(chatId, "❌ Bu havolani tanib bo'lmadi.");
     return;
   }
 
-  const statusMsg = await bot.sendMessage(chatId, `⏳ ${platform}'dan ${audioOnly ? 'musiqa' : 'video'} yuklanmoqda...`);
+  const isAudio = quality === 'audio';
+  const statusMsg = await bot.sendMessage(chatId, `⏳ Yuklanmoqda...`);
 
   const fileId = crypto.randomBytes(6).toString('hex');
   const outputTemplate = path.join(DOWNLOAD_DIR, `${fileId}.%(ext)s`);
   const flags = buildYtDlpFlags(platform);
 
-  const cmd = audioOnly
-    ? `yt-dlp ${flags} -f "bestaudio[ext=m4a]/bestaudio" -x --audio-format m4a -o "${outputTemplate}" "${url}"`
-    : `yt-dlp ${flags} -f "mp4/best" -o "${outputTemplate}" "${url}"`;
+  let formatCmd = '';
+  if (isAudio) {
+    formatCmd = `-f "bestaudio/best" -x --audio-format mp3`; 
+  } else {
+    // Tanlangan sifatga (masalan: 720) mos keladigan yoki undan kichikroq bo'lgan eng yaxshi sifatni topadi
+    formatCmd = `-f "bestvideo[height<=${quality}][ext=mp4]+bestaudio[ext=m4a]/best[height<=${quality}][ext=mp4]/best" --merge-output-format mp4`;
+  }
 
-  runAndSend(cmd, chatId, statusMsg.message_id, fileId, audioOnly, `❌ Yuklab bo'lmadi. Havola noto'g'ri yoki video mavjud emas bo'lishi mumkin.`);
+  const cmd = `yt-dlp ${flags} ${formatCmd} -o "${outputTemplate}" "${url}"`;
+
+  runAndSend(cmd, chatId, statusMsg.message_id, fileId, isAudio, `❌ Yuklab bo'lmadi. Havola noto'g'ri bo'lishi mumkin.`);
 }
 
 const SEARCH_CACHE = new Map();
@@ -237,9 +243,7 @@ async function handleMusicSearch(chatId, query) {
   const safeQuery = query.replace(/"/g, '');
   const cmd = `yt-dlp -4 --no-update --extractor-args "youtube:player_client=android" --flat-playlist --skip-download --socket-timeout 8 --print "%(id)s|||%(title)s" "ytsearch10:${safeQuery}"`;
 
-  const searchT0 = Date.now();
   exec(cmd, { maxBuffer: 1024 * 1024 * 20 }, async (error, stdout) => {
-    console.log(`[TIMING] Qidiruv "${query}": ${((Date.now() - searchT0) / 1000).toFixed(1)}s`);
     if (error || !stdout.trim()) {
       bot.editMessageText(`❌ "${query}" bo'yicha hech narsa topilmadi.`, {
         chat_id: chatId,
@@ -287,13 +291,14 @@ async function handleMusicSearch(chatId, query) {
   });
 }
 
+// HAVOLA BO'YICHA TUGMALAR BOSILGANDA
 bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
   const data = query.data || '';
 
   if (!data.startsWith('dl:')) return;
 
-  const [, linkId, kind] = data.split(':');
+  const [, linkId, quality] = data.split(':');
   const cached = LINK_CACHE.get(linkId);
 
   if (!cached) {
@@ -301,10 +306,18 @@ bot.on('callback_query', async (query) => {
     return;
   }
 
-  bot.answerCallbackQuery(query.id, { text: kind === 'audio' ? '⏳ Audio yuklanmoqda...' : '⏳ Video yuklanmoqda...' }).catch(() => {});
+  const textMap = {
+    '360': '⏳ Video (360p) yuklanmoqda...',
+    '480': '⏳ Video (480p) yuklanmoqda...',
+    '720': '⏳ Video (720p) yuklanmoqda...',
+    '1080': '⏳ Video (1080p) yuklanmoqda...',
+    'audio': '⏳ Audio (MP3) yuklanmoqda...'
+  };
+
+  bot.answerCallbackQuery(query.id, { text: textMap[quality] || '⏳ Yuklanmoqda...' }).catch(() => {});
   bot.deleteMessage(chatId, query.message.message_id).catch(() => {});
 
-  await handleDownload(chatId, cached.url, kind === 'audio');
+  await handleDownload(chatId, cached.url, quality);
 });
 
 bot.on('callback_query', async (query) => {
@@ -367,23 +380,17 @@ function downloadAndSendPick(chatId, chosen, statusMessageId) {
   const fileId = crypto.randomBytes(6).toString('hex');
   const outputTemplate = path.join(DOWNLOAD_DIR, `${fileId}.%(ext)s`);
   const flags = buildYtDlpFlags('YouTube');
-  const cmd = `yt-dlp ${flags} -f "bestaudio[ext=m4a]/bestaudio" -x --audio-format m4a -o "${outputTemplate}" "${url}"`;
+  const cmd = `yt-dlp ${flags} -f "bestaudio/best" -x --audio-format mp3 -o "${outputTemplate}" "${url}"`;
 
-  console.log(`[TIMING] "${chosen.title}" yuklash boshlandi...`);
   const t0 = Date.now();
-
   return runAndSend(cmd, chatId, statusMessageId, fileId, true, `❌ "${chosen.title}" yuklab bo'lmadi.`, chosen.id, chosen.title, t0);
 }
 
 function runAndSend(cmd, chatId, statusMessageId, fileId, audioOnly, errorText, cacheKey, cacheTitle, t0) {
   const startedAt = t0 || Date.now();
-  // Bufer hajmi 2GB qilib o'zgartirildi (2048 MB)
+  
   exec(cmd, { maxBuffer: 1024 * 1024 * 2048 }, async (error, stdout, stderr) => {
-    const downloadMs = Date.now() - startedAt;
-    console.log(`[TIMING] yt-dlp jarayoni: ${(downloadMs / 1000).toFixed(1)}s (${cacheTitle || fileId})`);
-
     if (error) {
-      console.error(`[TIMING] XATOLIK (${(downloadMs / 1000).toFixed(1)}s dan keyin):`, stderr || error.message);
       bot.editMessageText(errorText, {
         chat_id: chatId,
         message_id: statusMessageId
@@ -398,15 +405,10 @@ function runAndSend(cmd, chatId, statusMessageId, fileId, audioOnly, errorText, 
     }
 
     const filePath = path.join(DOWNLOAD_DIR, files[0]);
-    const sizeMb = (fs.statSync(filePath).size / 1024 / 1024).toFixed(2);
-    console.log(`[TIMING] Fayl hajmi: ${sizeMb} MB, Telegram'ga yuklanmoqda...`);
-    const t1 = Date.now();
 
     try {
       if (audioOnly) {
         const sent = await bot.sendAudio(chatId, filePath, cacheTitle ? { title: cacheTitle } : {});
-        const uploadMs = Date.now() - t1;
-        console.log(`[TIMING] Telegram'ga yuklash: ${(uploadMs / 1000).toFixed(1)}s | JAMI: ${((Date.now() - startedAt) / 1000).toFixed(1)}s`);
         
         if (cacheKey && sent && sent.audio && sent.audio.file_id) {
           AUDIO_CACHE[cacheKey] = sent.audio.file_id;
@@ -414,26 +416,15 @@ function runAndSend(cmd, chatId, statusMessageId, fileId, audioOnly, errorText, 
         }
       } else {
         await bot.sendVideo(chatId, filePath, {}, { filename: files[0], contentType: 'video/mp4' });
-        console.log(`[TIMING] JAMI: ${((Date.now() - startedAt) / 1000).toFixed(1)}s`);
       }
       await bot.deleteMessage(chatId, statusMessageId).catch(() => {});
     } catch (sendErr) {
-      console.error(sendErr);
-      // Xatolik xabari 2GB ga moslab yozildi
-      bot.sendMessage(chatId, "❌ Faylni yuborishda xatolik yuz berdi (fayl hajmi 2GB dan oshgan bo'lishi mumkin yoki serverda muammo).");
+      bot.sendMessage(chatId, "❌ Faylni yuborishda xatolik yuz berdi (fayl hajmi oshib ketgan bo'lishi mumkin).");
     } finally {
       fs.unlink(filePath, () => {}); 
     }
   });
 }
 
-bot.on('polling_error', (error) => {
-  console.error('Polling xatosi:', error.code, error.message);
-});
-
+bot.on('polling_error', (error) => {});
 console.log("🤖 Bot ishga tushdi...");
-if (STORAGE_CHAT_ID) {
-  console.log(`📦 Ombor kanali sozlangan: ${STORAGE_CHAT_ID}`);
-} else {
-  console.log("⚠️ STORAGE_CHAT_ID sozlanmagan — prefetch (oldindan yuklash) o'chirilgan.");
-}
