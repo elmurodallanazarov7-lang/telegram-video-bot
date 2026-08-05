@@ -234,7 +234,66 @@ async function handleDownload(chatId, url, quality) {
 
   const cmd = `yt-dlp ${flags} ${formatCmd} -o "${outputTemplate}" "${url}"`;
 
-  runAndSend(cmd, chatId, statusMsg.message_id, fileId, isAudio, `❌ Yuklab bo'lmadi. Havola noto'g'ri bo'lishi mumkin.`);
+  // Agar audio bo'lsa, uni avval kanalga tashlab keshlaydigan funksiyaga yo'naltiramiz
+  if (isAudio) {
+    const t0 = Date.now();
+    // YouTube video ID ni havoladan ajratib olishga harakat qilamiz
+    let videoId = null;
+    const ytMatch = url.match(/(?:v=|\/)([0-9A-Za-z_-]{11}).*/);
+    if (ytMatch) videoId = ytMatch[1];
+
+    return runAndSendAudioWithCache(cmd, chatId, statusMsg.message_id, fileId, videoId, t0);
+  } else {
+    return runAndSend(cmd, chatId, statusMessageId = statusMsg.message_id, fileId, false, `❌ Videoni yuklab bo'lmadi.`);
+  }
+}
+
+// Havola orqali yuklangan audioni kanalga keshlab jo'natish uchun maxsus funksiya
+function runAndSendAudioWithCache(cmd, chatId, statusMessageId, fileId, videoId, t0) {
+  const startedAt = t0 || Date.now();
+
+  exec(cmd, { maxBuffer: 1024 * 1024 * 2048 }, async (error, stdout, stderr) => {
+    if (error) {
+      bot.editMessageText("❌ Audio yuklab bo'lmadi.", { chat_id: chatId, message_id: statusMessageId }).catch(() => {});
+      return;
+    }
+
+    const files = fs.readdirSync(DOWNLOAD_DIR).filter(f => f.startsWith(fileId));
+    if (files.length === 0) {
+      bot.editMessageText("❌ Fayl topilmadi.", { chat_id: chatId, message_id: statusMessageId }).catch(() => {});
+      return;
+    }
+
+    const filePath = path.join(DOWNLOAD_DIR, files[0]);
+
+    try {
+      // 1. Avval ombor kanaliga yuboramiz va file_id olamiz
+      let sentToStorage = null;
+      if (STORAGE_CHAT_ID) {
+        sentToStorage = await bot.sendAudio(STORAGE_CHAT_ID, filePath);
+      }
+
+      // 2. Foydalanuvchiga yuboramiz
+      if (sentToStorage && sentToStorage.audio && sentToStorage.audio.file_id) {
+        await bot.sendAudio(chatId, sentToStorage.audio.file_id);
+        
+        // Agar YouTube bo'lsa, keshga yozib qo'yamiz
+        if (videoId) {
+          AUDIO_CACHE[videoId] = sentToStorage.audio.file_id;
+          saveAudioCache();
+        }
+      } else {
+        // Agar omborga yuborishda muammo bo'lsa, to'g'ridan-to'g'ri fayldan yuboramiz
+        await bot.sendAudio(chatId, filePath);
+      }
+
+      await bot.deleteMessage(chatId, statusMessageId).catch(() => {});
+    } catch (sendErr) {
+      bot.sendMessage(chatId, "❌ Audioni yuborishda xatolik yuz berdi.");
+    } finally {
+      fs.unlink(filePath, () => {});
+    }
+  });
 }
 
 const SEARCH_CACHE = new Map();
@@ -393,18 +452,15 @@ function downloadAndSendPick(chatId, chosen, statusMessageId) {
   const cmd = `yt-dlp ${flags} -f "bestaudio/best" -x --audio-format mp3 -o "${outputTemplate}" "${url}"`;
 
   const t0 = Date.now();
-  return runAndSend(cmd, chatId, statusMessageId, fileId, true, `❌ "${chosen.title}" yuklab bo'lmadi.`, chosen.id, chosen.title, t0);
+  return runAndSendPickAudio(cmd, chatId, statusMessageId, fileId, chosen.id, chosen.title, t0);
 }
 
-function runAndSend(cmd, chatId, statusMessageId, fileId, audioOnly, errorText, cacheKey, cacheTitle, t0) {
+function runAndSendPickAudio(cmd, chatId, statusMessageId, fileId, cacheKey, cacheTitle, t0) {
   const startedAt = t0 || Date.now();
   
   exec(cmd, { maxBuffer: 1024 * 1024 * 2048 }, async (error, stdout, stderr) => {
     if (error) {
-      bot.editMessageText(errorText, {
-        chat_id: chatId,
-        message_id: statusMessageId
-      }).catch(() => {});
+      bot.editMessageText("❌ Yuklab bo'lmadi.", { chat_id: chatId, message_id: statusMessageId }).catch(() => {});
       return;
     }
 
@@ -417,19 +473,50 @@ function runAndSend(cmd, chatId, statusMessageId, fileId, audioOnly, errorText, 
     const filePath = path.join(DOWNLOAD_DIR, files[0]);
 
     try {
-      if (audioOnly) {
-        const sent = await bot.sendAudio(chatId, filePath, cacheTitle ? { title: cacheTitle } : {});
-        
-        if (cacheKey && sent && sent.audio && sent.audio.file_id) {
-          AUDIO_CACHE[cacheKey] = sent.audio.file_id;
+      let sentToStorage = null;
+      if (STORAGE_CHAT_ID) {
+        sentToStorage = await bot.sendAudio(STORAGE_CHAT_ID, filePath, cacheTitle ? { title: cacheTitle } : {});
+      }
+
+      if (sentToStorage && sentToStorage.audio && sentToStorage.audio.file_id) {
+        await bot.sendAudio(chatId, sentToStorage.audio.file_id);
+        if (cacheKey) {
+          AUDIO_CACHE[cacheKey] = sentToStorage.audio.file_id;
           saveAudioCache();
         }
       } else {
-        await bot.sendVideo(chatId, filePath, {}, { filename: files[0], contentType: 'video/mp4' });
+        await bot.sendAudio(chatId, filePath, cacheTitle ? { title: cacheTitle } : {});
       }
+
       await bot.deleteMessage(chatId, statusMessageId).catch(() => {});
     } catch (sendErr) {
-      bot.sendMessage(chatId, "❌ Faylni yuborishda xatolik yuz berdi (fayl hajmi oshib ketgan bo'lishi mumkin).");
+      bot.sendMessage(chatId, "❌ Faylni yuborishda xatolik yuz berdi.");
+    } finally {
+      fs.unlink(filePath, () => {}); 
+    }
+  });
+}
+
+function runAndSend(cmd, chatId, statusMessageId, fileId, audioOnly, errorText) {
+  exec(cmd, { maxBuffer: 1024 * 1024 * 2048 }, async (error, stdout, stderr) => {
+    if (error) {
+      bot.editMessageText(errorText, { chat_id: chatId, message_id: statusMessageId }).catch(() => {});
+      return;
+    }
+
+    const files = fs.readdirSync(DOWNLOAD_DIR).filter(f => f.startsWith(fileId));
+    if (files.length === 0) {
+      bot.editMessageText("❌ Fayl topilmadi.", { chat_id: chatId, message_id: statusMessageId }).catch(() => {});
+      return;
+    }
+
+    const filePath = path.join(DOWNLOAD_DIR, files[0]);
+
+    try {
+      await bot.sendVideo(chatId, filePath, {}, { filename: files[0], contentType: 'video/mp4' });
+      await bot.deleteMessage(chatId, statusMessageId).catch(() => {});
+    } catch (sendErr) {
+      bot.sendMessage(chatId, "❌ Videoni yuborishda xatolik yuz berdi.");
     } finally {
       fs.unlink(filePath, () => {}); 
     }
