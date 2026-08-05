@@ -13,7 +13,6 @@ const TOKEN = process.env.BOT_TOKEN;
 const PORT = Number(process.env.PORT || 10000);
 const DOWNLOAD_DIR = path.resolve(process.env.DOWNLOAD_DIR || "./downloads");
 
-// YANGI: Yopiq kanal ID'si (Masalan: -1001234567890). .env faylga DUMP_CHANNEL qo'shing.
 const DUMP_CHANNEL = process.env.DUMP_CHANNEL; 
 const DB_FILE = path.join(__dirname, "database.json");
 
@@ -34,7 +33,6 @@ let updateOffset = 0;
 let polling = true;
 let conflictLoggedAt = 0;
 
-// YANGI: Baza tizimini ishga tushirish
 let fileDB = {};
 if (fs.existsSync(DB_FILE)) {
   try {
@@ -107,7 +105,7 @@ async function sendFile(method, chatId, filePath, filename, fields = {}) {
   const response = await fetch(`${telegram}/${method}`, {
     method: "POST",
     body: form,
-    signal: AbortSignal.timeout(300000), // 5 daqiqa
+    signal: AbortSignal.timeout(300000),
   });
   const payload = await response.json();
   if (!response.ok || !payload.ok) {
@@ -166,7 +164,6 @@ function prepareCookies() {
   }
 }
 
-// YANGI: Format xatosini aylanib o'tish uchun mijozlarni o'zgartirdik (android, ios, mweb qo'shildi)
 const YT_CLIENTS = ["android", "ios", "mweb", "tv"];
 
 function ytArgs(url, clientOverride) {
@@ -181,10 +178,9 @@ function ytArgs(url, clientOverride) {
   ];
   if (runtimeCookiesPath) args.push("--cookies", runtimeCookiesPath);
   if (detectPlatform(url) === "YouTube") {
-    // "Requested format is not available" xatosiga qarshi:
     args.push(
       "--extractor-args",
-      `youtube:player_client=${clientOverride || "android,ios,mweb"}`
+      `youtube:player_client=${clientOverride || "android,ios,mweb"};formats=missing_pot`
     );
   }
   return args;
@@ -252,7 +248,7 @@ async function download(url, kind, height) {
         }
       }
       lastError = null;
-      break; // Muvaffaqiyatli yuklansa sikldan chiqadi
+      break;
     } catch (error) {
       lastError = error;
       console.warn(`Yuklash urinishi muvaffaqiyatsiz (client=${client || "default"}):`, error.message);
@@ -292,7 +288,6 @@ async function downloadAndSend(chatId, url, kind, height, title) {
     return;
   }
   
-  // YANGI: Kesh (Database) tizimi. Bir marta yuklangan narsani bazadan izlaydi.
   const dbKey = `${url}_${kind}_${height || "default"}`;
   
   if (fileDB[dbKey]) {
@@ -302,10 +297,10 @@ async function downloadAndSend(chatId, url, kind, height, title) {
         [kind === "audio" ? "audio" : "video"]: fileDB[dbKey],
         caption: cleanTitle(title || ""),
       });
-      return; // Tayyor fayl jo'natildi, yuklash shart emas!
+      return;
     } catch (err) {
       console.warn("Keshdagi file_id ishlamadi, qayta yuklanadi.");
-      delete fileDB[dbKey]; // Xato bo'lsa bazadan o'chirib, qayta yuklaydi
+      delete fileDB[dbKey];
       saveDB();
     }
   }
@@ -324,7 +319,6 @@ async function downloadAndSend(chatId, url, kind, height, title) {
     let fileIdToSave = null;
     let sentMessage = null;
 
-    // Agar DUMP_CHANNEL kiritilgan bo'lsa, avval bazaga jo'natib ID olamiz
     if (DUMP_CHANNEL) {
       try {
         if (kind === "audio") {
@@ -341,10 +335,9 @@ async function downloadAndSend(chatId, url, kind, height, title) {
           if (sentMessage.video) fileIdToSave = sentMessage.video.file_id;
         }
         
-        // Kanalga tushgan tayyor faylni Endi Foydalanuvchiga Forward qilamiz (tezkor)
         if (fileIdToSave) {
           fileDB[dbKey] = fileIdToSave;
-          saveDB(); // Bazaga saqlaymiz
+          saveDB();
 
           await tg(kind === "audio" ? "sendAudio" : "sendVideo", {
             chat_id: chatId,
@@ -357,7 +350,6 @@ async function downloadAndSend(chatId, url, kind, height, title) {
       }
     }
 
-    // Agar kanalga yuborilmagan bo'lsa (yoki DUMP_CHANNEL yo'q bo'lsa), to'g'ridan-to'g'ri userga yuboramiz
     if (!fileIdToSave) {
       if (kind === "audio") {
         await sendFile("sendAudio", chatId, filePath, filename, {
@@ -576,7 +568,7 @@ async function start() {
   }
 
   await tg("deleteWebhook", { drop_pending_updates: false }).catch(() => {});
-  console.log("Telegram downloader tezlashtirilgan rejimda (CASH tizimi bilan) ishga tushdi.");
+  console.log("Telegram downloader optimallashtirilgan rejimda ishga tushdi.");
   poll();
 }
 
@@ -585,6 +577,7 @@ const server = http.createServer((_req, res) => {
   res.end("Telegram downloader ishlayapti");
 });
 
+server.PORT = PORT;
 server.listen(PORT, "0.0.0.0");
 start().catch((error) => {
   console.error("Bot ishga tushmadi:", error);
