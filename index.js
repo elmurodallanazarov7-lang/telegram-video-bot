@@ -7,15 +7,17 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
+// ==========================================
+// 1-QISM: ASOSIY MUSIQA/VIDEO BOT SOZLAMALARI
+// ==========================================
 const TOKEN = process.env.BOT_TOKEN;
-
 if (!TOKEN) {
   console.error("❌ BOT_TOKEN topilmadi! .env faylga tokeningizni qo'shing.");
   process.exit(1);
 }
-
 const bot = new TelegramBot(TOKEN, { polling: true });
 
+// Render serverni uyg'oq saqlash
 if (process.env.PORT) {
   const http = require('http');
   const https = require('https');
@@ -24,20 +26,62 @@ if (process.env.PORT) {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('Bot ishlayapti ✅');
   }).listen(process.env.PORT, () => {
-    console.log(`🌐 Health-check server ${process.env.PORT}-portda ishga tushdi`);
-    
+    console.log(`🌐 Server ${process.env.PORT}-portda ishga tushdi`);
     setInterval(() => {
       const RENDER_URL = 'https://telegram-video-bot-k1xp.onrender.com/'; 
-      
-      https.get(RENDER_URL, (res) => {
-        console.log(`⏱ Uyg'otish pingi yuborildi: ${res.statusCode}`);
-      }).on('error', (e) => {
-        console.error(`Ping xatosi: ${e.message}`);
-      });
+      https.get(RENDER_URL, (res) => {}).on('error', (e) => {});
     }, 14 * 60 * 1000);
   });
 }
 
+// ==========================================
+// 2-QISM: REAKSIYA BOTLAR TARMOG'I (BOTNET)
+// ==========================================
+const REACTION_TOKENS = process.env.REACTION_TOKENS ? process.env.REACTION_TOKENS.split(',') : [];
+const EMOJIS = ["👍", "❤️", "🔥", "🥰", "👏", "🎉", "🤩", "💯", "⚡️", "🏆"];
+const processedPosts = new Set(); // Bitta postga 2 marta kirishni oldini olish uchun Kesh
+
+// Xotira to'lib ketmasligi uchun eski postlar keshini tozalab turamiz
+setInterval(() => { processedPosts.clear(); }, 1000 * 60 * 60 * 24);
+
+if (REACTION_TOKENS.length > 0) {
+  console.log(`🤖 Reaksiya tarmog'i ishga tushdi: ${REACTION_TOKENS.length} ta bot ulandi.`);
+  
+  REACTION_TOKENS.forEach((rToken) => {
+    if (!rToken.trim()) return;
+    const rBot = new TelegramBot(rToken.trim(), { polling: true });
+
+    rBot.on('channel_post', async (msg) => {
+      const uniqueId = `${msg.chat.id}_${msg.message_id}`;
+      if (processedPosts.has(uniqueId)) return;
+      processedPosts.add(uniqueId); 
+
+      // Post topilgach, 8 ta bot birin-ketin reaksiya bosadi
+      REACTION_TOKENS.forEach((token, i) => {
+        setTimeout(async () => {
+          const randomEmoji = EMOJIS[Math.floor(Math.random() * EMOJIS.length)];
+          try {
+            await fetch(`https://api.telegram.org/bot${token.trim()}/setMessageReaction`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                chat_id: msg.chat.id,
+                message_id: msg.message_id,
+                reaction: [{ type: 'emoji', emoji: randomEmoji }]
+              })
+            });
+          } catch (e) {
+            // Agar bot kanalga admin qilinmagan bo'lsa xato beradi, uni e'tiborsiz qoldiramiz
+          }
+        }, i * 1500); // Har bir bot 1.5 soniya oraliq bilan bosadi (Tabiiy ko'rinishi uchun)
+      });
+    });
+  });
+}
+
+// ==========================================
+// 3-QISM: MUSIQA VA VIDEO YUKLASH MANTIG'I
+// ==========================================
 const DOWNLOAD_DIR = path.join(__dirname, 'downloads');
 if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR);
 
@@ -71,20 +115,25 @@ bot.onText(/^\/start/, (msg) => {
   const chatId = msg.chat.id;
   bot.sendMessage(chatId,
     "Salom! 👋\n\n" +
-    "Men Instagram, TikTok va YouTube'dan video va musiqa yuklab beraman.\n\n" +
-    "📥 *Video/audio yuklash:* shunchaki havolani yuboring.\n" +
-    "🔎 *Qo'shiq nomi bilan qidirish:* shunchaki qo'shiq/ijrochi nomini yozing\n\n" +
-    "Masalan:\n" +
-    "`https://www.tiktok.com/@user/video/123456`\n" +
-    "`Ummon guruhi - Sensiz`",
-    { parse_mode: 'Markdown' }
+    "Men Instagram, TikTok va YouTube'dan video va musiqa yuklab beraman, shuningdek kanallaringizga reaksiya yig'ishda yordam beraman.\n\n" +
+    "📥 *Yuklab olish uchun:* shunchaki havola yuboring.\n" +
+    "🔎 *Musiqa qidirish uchun:* qo'shiq nomini yozing.",
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '⚡️ Kanalga reaksiya yig\'ish', callback_data: 'menu_reactions' }],
+          [{ text: '🤖 Yordam / Qo\'llanma', callback_data: 'menu_help' }]
+        ]
+      }
+    }
   );
 });
 
 bot.onText(/^\/help/, (msg) => {
   bot.sendMessage(msg.chat.id,
     "🤖 Buyruqlar:\n" +
-    "/start - Botni ishga tushirish\n" +
+    "/start - Botni bosh sahifasi\n" +
     "/help - Yordam"
   );
 });
@@ -119,13 +168,11 @@ bot.on('message', async (msg) => {
       return;
     }
 
-    // AGAR INSTAGRAM YOKI TIKTOK BO'LSA - DARROV VIDEONI YUKLAYDI
     if (platform === 'Instagram' || platform === 'TikTok') {
       await handleDownload(chatId, url, 'video');
       return;
     }
 
-    // YOUTUBE BO'LSA - FORMAT MENYUSINI CHIQARADI
     const linkId = crypto.randomBytes(4).toString('hex');
     LINK_CACHE.set(linkId, { url, timestamp: Date.now() });
 
@@ -391,85 +438,152 @@ async function handleMusicSearch(chatId, query) {
 
 bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
+  const messageId = query.message.message_id;
   const data = query.data || '';
 
-  if (!data.startsWith('dl:')) return;
+  if (data === 'menu_reactions') {
+    bot.answerCallbackQuery(query.id).catch(() => {});
+    const reactionText = 
+      "⚡️ **Reaksiya xizmati**\n\n" +
+      "Kanal va guruhlaringizga avtomatik reaksiya yig'ish uchun quyidagi botlarni kanalingizga to'liq administrator qilib qo'shing:\n\n" +
+      "1️⃣ @SizningBot_1\n" +
+      "2️⃣ @SizningBot_2\n" +
+      "3️⃣ @SizningBot_3\n" +
+      "4️⃣ @SizningBot_4\n" +
+      "5️⃣ @SizningBot_5\n" +
+      "6️⃣ @SizningBot_6\n" +
+      "7️⃣ @SizningBot_7\n" +
+      "8️⃣ @SizningBot_8\n\n" +
+      "💡 *(Ushbu matnni o'z botingiz nomlariga o'zgartirib olasiz)*\n" +
+      "Barcha botlar admin qilingandan so'ng xizmat avtomatik ishlay boshlaydi.";
 
-  const [, linkId, quality] = data.split(':');
-  const cached = LINK_CACHE.get(linkId);
-
-  if (!cached) {
-    bot.answerCallbackQuery(query.id, { text: '⏱ Havola muddati tugagan, qayta yuboring.', show_alert: true }).catch(() => {});
+    bot.editMessageText(reactionText, {
+      chat_id: chatId,
+      message_id: messageId,
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '🔙 Orqaga', callback_data: 'menu_back' }]
+        ]
+      }
+    }).catch(() => {});
     return;
   }
 
-  const textMap = {
-    '360': '⏳ Video (360p) yuklanmoqda...',
-    '480': '⏳ Video (480p) yuklanmoqda...',
-    '720': '⏳ Video (720p) yuklanmoqda...',
-    '1080': '⏳ Video (1080p) yuklanmoqda...',
-    'audio': '⏳ Audio (MP3) yuklanmoqda...'
-  };
-
-  bot.answerCallbackQuery(query.id, { text: textMap[quality] || '⏳ Yuklanmoqda...' }).catch(() => {});
-  bot.deleteMessage(chatId, query.message.message_id).catch(() => {});
-
-  await handleDownload(chatId, cached.url, quality);
-});
-
-bot.on('callback_query', async (query) => {
-  const chatId = query.message.chat.id;
-  const data = query.data || '';
-
-  if (!data.startsWith('pick:')) return;
-
-  const [, searchId, indexStr] = data.split(':');
-  const cached = SEARCH_CACHE.get(searchId);
-
-  if (!cached) {
-    bot.answerCallbackQuery(query.id, { text: '⏱ Bu qidiruv muddati tugagan, qayta qidiring.', show_alert: true }).catch(() => {});
+  if (data === 'menu_help') {
+    bot.answerCallbackQuery(query.id).catch(() => {});
+    bot.editMessageText(
+      "🤖 **Qo'llanma:**\n\n" +
+      "• Instagram, TikTok yoki YouTube havolasini yuboring — video yuklab beraman.\n" +
+      "• Qo'shiq nomini yozing — musiqalarni qidirib topib beraman.",
+      {
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🔙 Orqaga', callback_data: 'menu_back' }]
+          ]
+        }
+      }
+    ).catch(() => {});
     return;
   }
 
-  const index = parseInt(indexStr, 10);
-  const chosen = cached.results[index];
-  if (!chosen) {
-    bot.answerCallbackQuery(query.id, { text: '❌ Topilmadi.', show_alert: true }).catch(() => {});
+  if (data === 'menu_back') {
+    bot.answerCallbackQuery(query.id).catch(() => {});
+    bot.editMessageText(
+      "Salom! 👋\n\n" +
+      "Men Instagram, TikTok va YouTube'dan video va musiqa yuklab beraman, shuningdek kanallaringizga reaksiya yig'ishda yordam beraman.\n\n" +
+      "📥 *Yuklab olish uchun:* shunchaki havola yuboring.\n" +
+      "🔎 *Musiqa qidirish uchun:* qo'shiq nomini yozing.",
+      {
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '⚡️ Kanalga reaksiya yig\'ish', callback_data: 'menu_reactions' }],
+            [{ text: '🤖 Yordam / Qo\'llanma', callback_data: 'menu_help' }]
+          ]
+        }
+      }
+    ).catch(() => {});
     return;
   }
 
-  const cachedFileId = AUDIO_CACHE[chosen.id];
-  if (cachedFileId) {
-    bot.answerCallbackQuery(query.id, { text: `✅ ${chosen.title}` }).catch(() => {});
-    const statusMsg = await bot.sendMessage(chatId, `📤 "${chosen.title}" yuborilmoqda...`);
-    try {
-      await bot.sendAudio(chatId, cachedFileId, { title: chosen.title });
-      await bot.deleteMessage(chatId, statusMsg.message_id).catch(() => {});
+  if (data.startsWith('dl:')) {
+    const [, linkId, quality] = data.split(':');
+    const cached = LINK_CACHE.get(linkId);
+
+    if (!cached) {
+      bot.answerCallbackQuery(query.id, { text: '⏱ Havola muddati tugagan, qayta yuboring.', show_alert: true }).catch(() => {});
       return;
-    } catch (e) {
-      delete AUDIO_CACHE[chosen.id];
-      saveAudioCache();
     }
+
+    const textMap = {
+      '360': '⏳ Video (360p) yuklanmoqda...',
+      '480': '⏳ Video (480p) yuklanmoqda...',
+      '720': '⏳ Video (720p) yuklanmoqda...',
+      '1080': '⏳ Video (1080p) yuklanmoqda...',
+      'audio': '⏳ Audio (MP3) yuklanmoqda...'
+    };
+
+    bot.answerCallbackQuery(query.id, { text: textMap[quality] || '⏳ Yuklanmoqda...' }).catch(() => {});
+    bot.deleteMessage(chatId, query.message.message_id).catch(() => {});
+
+    await handleDownload(chatId, cached.url, quality);
   }
 
-  if (PENDING_PREFETCH.has(chosen.id)) {
-    bot.answerCallbackQuery(query.id, { text: `⏳ ${chosen.title} deyarli tayyor...` }).catch(() => {});
-    const statusMsg = await bot.sendMessage(chatId, `⏳ "${chosen.title}" tayyorlanmoqda...`);
-    const fid = await PENDING_PREFETCH.get(chosen.id);
-    if (fid) {
+  if (data.startsWith('pick:')) {
+    const [, searchId, indexStr] = data.split(':');
+    const cached = SEARCH_CACHE.get(searchId);
+
+    if (!cached) {
+      bot.answerCallbackQuery(query.id, { text: '⏱ Bu qidiruv muddati tugagan, qayta qidiring.', show_alert: true }).catch(() => {});
+      return;
+    }
+
+    const index = parseInt(indexStr, 10);
+    const chosen = cached.results[index];
+    if (!chosen) {
+      bot.answerCallbackQuery(query.id, { text: '❌ Topilmadi.', show_alert: true }).catch(() => {});
+      return;
+    }
+
+    const cachedFileId = AUDIO_CACHE[chosen.id];
+    if (cachedFileId) {
+      bot.answerCallbackQuery(query.id, { text: `✅ ${chosen.title}` }).catch(() => {});
+      const statusMsg = await bot.sendMessage(chatId, `📤 "${chosen.title}" yuborilmoqda...`);
       try {
-        await bot.sendAudio(chatId, fid, { title: chosen.title });
+        await bot.sendAudio(chatId, cachedFileId, { title: chosen.title });
         await bot.deleteMessage(chatId, statusMsg.message_id).catch(() => {});
         return;
-      } catch (e) { }
+      } catch (e) {
+        delete AUDIO_CACHE[chosen.id];
+        saveAudioCache();
+      }
     }
+
+    if (PENDING_PREFETCH.has(chosen.id)) {
+      bot.answerCallbackQuery(query.id, { text: `⏳ ${chosen.title} deyarli tayyor...` }).catch(() => {});
+      const statusMsg = await bot.sendMessage(chatId, `⏳ "${chosen.title}" tayyorlanmoqda...`);
+      const fid = await PENDING_PREFETCH.get(chosen.id);
+      if (fid) {
+        try {
+          await bot.sendAudio(chatId, fid, { title: chosen.title });
+          await bot.deleteMessage(chatId, statusMsg.message_id).catch(() => {});
+          return;
+        } catch (e) { }
+      }
+      return await downloadAndSendPick(chatId, chosen, statusMsg.message_id);
+    }
+
+    bot.answerCallbackQuery(query.id, { text: `⏳ ${chosen.title} yuklanmoqda...` }).catch(() => {});
+
+    const statusMsg = await bot.sendMessage(chatId, `⏳ "${chosen.title}" yuklanmoqda...`);
     return await downloadAndSendPick(chatId, chosen, statusMsg.message_id);
   }
-
-  bot.answerCallbackQuery(query.id, { text: `⏳ ${chosen.title} yuklanmoqda...` }).catch(() => {});
-
-  const statusMsg = await bot.sendMessage(chatId, `⏳ "${chosen.title}" yuklanmoqda...`);
-  return await downloadAndSendPick(chatId, chosen, statusMsg.message_id);
 });
 
 function downloadAndSendPick(chatId, chosen, statusMessageId) {
