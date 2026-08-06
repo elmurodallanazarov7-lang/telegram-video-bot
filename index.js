@@ -118,11 +118,8 @@ try {
   AUDIO_CACHE = {};
 }
 let cacheSaveTimer = null;
-// Audio keshini darhol diskka yozadi va fayl haqiqatan ham yozilganini tekshiradi.
-// Oldin 500ms kechikish bilan (debounce) yozilardi — bu esa server aynan
-// o'sha oraliqda qulab tushsa, oxirgi yozuv yo'qolib qolishi mumkin edi.
 function saveAudioCache() {
-  clearTimeout(cacheSaveTimer); // eski debounce qoldig'i bo'lsa, bekor qilamiz
+  clearTimeout(cacheSaveTimer);
   try {
     fs.writeFileSync(CACHE_FILE, JSON.stringify(AUDIO_CACHE));
     if (!fs.existsSync(CACHE_FILE)) {
@@ -167,7 +164,6 @@ async function initMongoCache() {
     audioCacheCollection = db.collection('audio_cache');
     videoCacheCollection = db.collection('video_cache');
 
-    // Mongo'dagi mavjud yozuvlarni xotiraga yuklaymiz (lokal fayldan ustun turadi)
     const audioDocs = await audioCacheCollection.find({}).toArray();
     audioDocs.forEach((doc) => {
       AUDIO_CACHE[doc._id] = doc.file_id;
@@ -189,7 +185,6 @@ async function initMongoCache() {
 }
 initMongoCache();
 
-// Har bir cache yozuvini xotira + lokal fayl + MongoDB Atlas'ga birdek yozadi
 async function setAudioCache(key, fileId) {
   if (!key) return;
   AUDIO_CACHE[key] = fileId;
@@ -207,7 +202,6 @@ async function setAudioCache(key, fileId) {
   }
 }
 
-// Yaroqsiz bo'lib qolgan cache yozuvini hamma joydan o'chiradi
 async function deleteAudioCache(key) {
   if (!key) return;
   delete AUDIO_CACHE[key];
@@ -221,7 +215,6 @@ async function deleteAudioCache(key) {
   }
 }
 
-// Video uchun xuddi shu tarzda: xotira + lokal fayl + MongoDB Atlas
 async function setVideoCache(key, fileId) {
   if (!key) return;
   VIDEO_CACHE[key] = fileId;
@@ -252,8 +245,6 @@ async function deleteVideoCache(key) {
   }
 }
 
-// Video uchun keshlash kaliti: YouTube uchun video ID, boshqalar uchun URL hashi,
-// har doim sifat (quality) bilan birga — chunki 360p va 1080p alohida fayllar
 function getVideoCacheKey(platform, url, quality) {
   let baseId = null;
   if (platform === 'YouTube') {
@@ -277,10 +268,6 @@ function detectPlatform(url) {
   return null;
 }
 
-// ==========================================
-// MAJBURIY OBUNA (FORCE SUBSCRIBE) — HOZIRCHA O'CHIRILGAN
-// Qayta yoqish uchun quyidagi ro'yxatga kanallarni qaytaring
-// ==========================================
 const FORCE_SUB_CHANNELS = [];
 
 async function getUnsubscribedChannels(userId) {
@@ -293,7 +280,6 @@ async function getUnsubscribedChannels(userId) {
         missing.push(ch);
       }
     } catch (e) {
-      // Bot kanalda a'zo/admin bo'lmasa yoki xatolik yuz bersa, ehtiyot uchun obuna bo'lmagan deb hisoblaymiz
       missing.push(ch);
     }
   }
