@@ -41,7 +41,7 @@ const REACTION_TOKENS = process.env.REACTION_TOKENS ? process.env.REACTION_TOKEN
 const EMOJIS = ["👍", "❤️", "🔥", "🥰", "👏", "🎉", "🤩", "💯", "⚡️", "🏆"];
 const processedPosts = new Set(); // Bitta postga 2 marta kirishni oldini olish uchun Kesh
 
-// Xotira to'lib ketmasligi uchun eski postlar keshini tozalab turamiz
+// Xotira to'lib ketmasligi uchun eski postlar keshini har 24 soatda tozalab turamiz
 setInterval(() => { processedPosts.clear(); }, 1000 * 60 * 60 * 24);
 
 if (REACTION_TOKENS.length > 0) {
@@ -56,7 +56,7 @@ if (REACTION_TOKENS.length > 0) {
       if (processedPosts.has(uniqueId)) return;
       processedPosts.add(uniqueId); 
 
-      // Post topilgach, 8 ta bot birin-ketin reaksiya bosadi
+      // Post topilgach, botlar birin-ketin reaksiya bosadi
       REACTION_TOKENS.forEach((token, i) => {
         setTimeout(async () => {
           const randomEmoji = EMOJIS[Math.floor(Math.random() * EMOJIS.length)];
@@ -111,6 +111,7 @@ function detectPlatform(url) {
   return null;
 }
 
+// /start buyrug'i - Bosh sahifa va menyu
 bot.onText(/^\/start/, (msg) => {
   const chatId = msg.chat.id;
   bot.sendMessage(chatId,
@@ -168,11 +169,13 @@ bot.on('message', async (msg) => {
       return;
     }
 
+    // Instagram va TikTok bo'lsa sifat tanlamasdan birdan yuklaydi
     if (platform === 'Instagram' || platform === 'TikTok') {
       await handleDownload(chatId, url, 'video');
       return;
     }
 
+    // YouTube bo'lsa sifat tanlash menyusi chiqadi
     const linkId = crypto.randomBytes(4).toString('hex');
     LINK_CACHE.set(linkId, { url, timestamp: Date.now() });
 
@@ -194,6 +197,7 @@ bot.on('message', async (msg) => {
       }
     });
   } else {
+    // Matn yozilsa musiqa qidiradi
     await handleMusicSearch(chatId, text.trim());
   }
 });
@@ -441,21 +445,15 @@ bot.on('callback_query', async (query) => {
   const messageId = query.message.message_id;
   const data = query.data || '';
 
+  // Tugma: Kanalga reaksiya yig'ish
   if (data === 'menu_reactions') {
     bot.answerCallbackQuery(query.id).catch(() => {});
     const reactionText = 
       "⚡️ **Reaksiya xizmati**\n\n" +
       "Kanal va guruhlaringizga avtomatik reaksiya yig'ish uchun quyidagi botlarni kanalingizga to'liq administrator qilib qo'shing:\n\n" +
-      "1️⃣ @SizningBot_1\n" +
-      "2️⃣ @SizningBot_2\n" +
-      "3️⃣ @SizningBot_3\n" +
-      "4️⃣ @SizningBot_4\n" +
-      "5️⃣ @SizningBot_5\n" +
-      "6️⃣ @SizningBot_6\n" +
-      "7️⃣ @SizningBot_7\n" +
-      "8️⃣ @SizningBot_8\n\n" +
-      "💡 *(Ushbu matnni o'z botingiz nomlariga o'zgartirib olasiz)*\n" +
-      "Barcha botlar admin qilingandan so'ng xizmat avtomatik ishlay boshlaydi.";
+      "1️⃣ @reaksiyachi001bot\n" +
+      "2️⃣ @reaksiyachi002bot\n\n" +
+      "💡 *Barcha botlar admin qilingandan so'ng xizmat avtomatik ishlay boshlaydi.*";
 
     bot.editMessageText(reactionText, {
       chat_id: chatId,
@@ -470,6 +468,7 @@ bot.on('callback_query', async (query) => {
     return;
   }
 
+  // Tugma: Yordam / Qo'llanma
   if (data === 'menu_help') {
     bot.answerCallbackQuery(query.id).catch(() => {});
     bot.editMessageText(
@@ -490,6 +489,7 @@ bot.on('callback_query', async (query) => {
     return;
   }
 
+  // Tugma: Orqaga qaytish
   if (data === 'menu_back') {
     bot.answerCallbackQuery(query.id).catch(() => {});
     bot.editMessageText(
