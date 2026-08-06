@@ -118,10 +118,33 @@ try {
   AUDIO_CACHE = {};
 }
 let cacheSaveTimer = null;
+// Audio keshini darhol diskka yozadi va fayl haqiqatan ham yozilganini tekshiradi.
+// Oldin 500ms kechikish bilan (debounce) yozilardi — bu esa server aynan
+// o'sha oraliqda qulab tushsa, oxirgi yozuv yo'qolib qolishi mumkin edi.
 function saveAudioCache() {
-  clearTimeout(cacheSaveTimer);
-  cacheSaveTimer = setTimeout(() => {
-    fs.writeFile(CACHE_FILE, JSON.stringify(AUDIO_CACHE), () => {});
+  clearTimeout(cacheSaveTimer); // eski debounce qoldig'i bo'lsa, bekor qilamiz
+  try {
+    fs.writeFileSync(CACHE_FILE, JSON.stringify(AUDIO_CACHE));
+    if (!fs.existsSync(CACHE_FILE)) {
+      console.error("⚠️ audio_cache.json yozildi, lekin diskda topilmadi!");
+    }
+  } catch (e) {
+    console.error("❌ audio_cache.json ga yozishda xatolik:", e.message);
+  }
+}
+
+const VIDEO_CACHE_FILE = path.join(DOWNLOAD_DIR, 'video_cache.json');
+let VIDEO_CACHE = {};
+try {
+  VIDEO_CACHE = JSON.parse(fs.readFileSync(VIDEO_CACHE_FILE, 'utf8'));
+} catch (e) {
+  VIDEO_CACHE = {};
+}
+let videoCacheSaveTimer = null;
+function saveVideoCache() {
+  clearTimeout(videoCacheSaveTimer);
+  videoCacheSaveTimer = setTimeout(() => {
+    fs.writeFile(VIDEO_CACHE_FILE, JSON.stringify(VIDEO_CACHE), () => {});
   }, 500);
 }
 
@@ -130,6 +153,7 @@ function saveAudioCache() {
 // ==========================================
 const MONGODB_URI = process.env.MONGODB_URI;
 let audioCacheCollection = null;
+let videoCacheCollection = null;
 
 async function initMongoCache() {
   if (!MONGODB_URI) {
@@ -141,17 +165,26 @@ async function initMongoCache() {
     await client.connect();
     const db = client.db('telegram_bot');
     audioCacheCollection = db.collection('audio_cache');
+    videoCacheCollection = db.collection('video_cache');
 
     // Mongo'dagi mavjud yozuvlarni xotiraga yuklaymiz (lokal fayldan ustun turadi)
-    const docs = await audioCacheCollection.find({}).toArray();
-    docs.forEach((doc) => {
+    const audioDocs = await audioCacheCollection.find({}).toArray();
+    audioDocs.forEach((doc) => {
       AUDIO_CACHE[doc._id] = doc.file_id;
     });
     saveAudioCache();
-    console.log(`🗄️ MongoDB Atlas'ga ulandi. ${docs.length} ta audio keshi yuklandi.`);
+
+    const videoDocs = await videoCacheCollection.find({}).toArray();
+    videoDocs.forEach((doc) => {
+      VIDEO_CACHE[doc._id] = doc.file_id;
+    });
+    saveVideoCache();
+
+    console.log(`🗄️ MongoDB Atlas'ga ulandi. ${audioDocs.length} ta audio, ${videoDocs.length} ta video keshi yuklandi.`);
   } catch (err) {
     console.error("❌ MongoDB Atlas'ga ulanishda xatolik:", err.message);
     audioCacheCollection = null;
+    videoCacheCollection = null;
   }
 }
 initMongoCache();
@@ -186,6 +219,51 @@ async function deleteAudioCache(key) {
       console.error("❌ MongoDB'dan o'chirishda xatolik:", e.message);
     }
   }
+}
+
+// Video uchun xuddi shu tarzda: xotira + lokal fayl + MongoDB Atlas
+async function setVideoCache(key, fileId) {
+  if (!key) return;
+  VIDEO_CACHE[key] = fileId;
+  saveVideoCache();
+  if (videoCacheCollection) {
+    try {
+      await videoCacheCollection.updateOne(
+        { _id: key },
+        { $set: { file_id: fileId, updatedAt: new Date() } },
+        { upsert: true }
+      );
+    } catch (e) {
+      console.error("❌ MongoDB'ga (video) yozishda xatolik:", e.message);
+    }
+  }
+}
+
+async function deleteVideoCache(key) {
+  if (!key) return;
+  delete VIDEO_CACHE[key];
+  saveVideoCache();
+  if (videoCacheCollection) {
+    try {
+      await videoCacheCollection.deleteOne({ _id: key });
+    } catch (e) {
+      console.error("❌ MongoDB'dan (video) o'chirishda xatolik:", e.message);
+    }
+  }
+}
+
+// Video uchun keshlash kaliti: YouTube uchun video ID, boshqalar uchun URL hashi,
+// har doim sifat (quality) bilan birga — chunki 360p va 1080p alohida fayllar
+function getVideoCacheKey(platform, url, quality) {
+  let baseId = null;
+  if (platform === 'YouTube') {
+    const ytMatch = url.match(/(?:v=|\/)([0-9A-Za-z_-]{11}).*/);
+    if (ytMatch) baseId = ytMatch[1];
+  }
+  if (!baseId) {
+    baseId = crypto.createHash('md5').update(url).digest('hex');
+  }
+  return `${baseId}_${quality}`;
 }
 
 const STORAGE_CHAT_ID = '-1004290504683'; 
@@ -428,6 +506,18 @@ async function handleDownload(chatId, url, quality) {
     }
   }
 
+  const videoCacheKey = !isAudio ? getVideoCacheKey(platform, url, quality) : null;
+  if (!isAudio && VIDEO_CACHE[videoCacheKey]) {
+    const statusMsg = await bot.sendMessage(chatId, `⏳ Yuborilmoqda...`);
+    try {
+      await bot.sendVideo(chatId, VIDEO_CACHE[videoCacheKey]);
+      await bot.deleteMessage(chatId, statusMsg.message_id).catch(() => {});
+      return;
+    } catch (e) {
+      await deleteVideoCache(videoCacheKey);
+    }
+  }
+
   const statusMsg = await bot.sendMessage(chatId, `⏳ Yuklanmoqda...`);
 
   const fileId = crypto.randomBytes(6).toString('hex');
@@ -449,7 +539,7 @@ async function handleDownload(chatId, url, quality) {
     const t0 = Date.now();
     return runAndSendAudioWithCache(cmd, chatId, statusMsg.message_id, fileId, videoId, t0);
   } else {
-    return runAndSend(cmd, chatId, statusMsg.message_id, fileId, false, `❌ Videoni yuklab bo'lmadi.`);
+    return runAndSendVideoWithCache(cmd, chatId, statusMsg.message_id, fileId, videoCacheKey);
   }
 }
 
@@ -795,10 +885,10 @@ function runAndSendPickAudio(cmd, chatId, statusMessageId, fileId, cacheKey, cac
   });
 }
 
-function runAndSend(cmd, chatId, statusMessageId, fileId, audioOnly, errorText) {
+function runAndSendVideoWithCache(cmd, chatId, statusMessageId, fileId, cacheKey) {
   exec(cmd, { maxBuffer: 1024 * 1024 * 2048 }, async (error, stdout, stderr) => {
     if (error) {
-      bot.editMessageText(errorText, { chat_id: chatId, message_id: statusMessageId }).catch(() => {});
+      bot.editMessageText("❌ Videoni yuklab bo'lmadi.", { chat_id: chatId, message_id: statusMessageId }).catch(() => {});
       return;
     }
 
@@ -811,7 +901,20 @@ function runAndSend(cmd, chatId, statusMessageId, fileId, audioOnly, errorText) 
     const filePath = path.join(DOWNLOAD_DIR, files[0]);
 
     try {
-      await bot.sendVideo(chatId, filePath, {}, { filename: files[0], contentType: 'video/mp4' });
+      let sentToStorage = null;
+      if (STORAGE_CHAT_ID) {
+        sentToStorage = await bot.sendVideo(STORAGE_CHAT_ID, filePath, {}, { filename: files[0], contentType: 'video/mp4' });
+      }
+
+      if (sentToStorage && sentToStorage.video && sentToStorage.video.file_id) {
+        await bot.sendVideo(chatId, sentToStorage.video.file_id);
+        if (cacheKey) {
+          await setVideoCache(cacheKey, sentToStorage.video.file_id);
+        }
+      } else {
+        await bot.sendVideo(chatId, filePath, {}, { filename: files[0], contentType: 'video/mp4' });
+      }
+
       await bot.deleteMessage(chatId, statusMessageId).catch(() => {});
     } catch (sendErr) {
       bot.sendMessage(chatId, "❌ Videoni yuborishda xatolik yuz berdi.");
