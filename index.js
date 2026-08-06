@@ -6,6 +6,7 @@ const { exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { MongoClient } = require('mongodb');
 
 // ==========================================
 // 1-QISM: ASOSIY MUSIQA/VIDEO BOT SOZLAMALARI
@@ -124,6 +125,69 @@ function saveAudioCache() {
   }, 500);
 }
 
+// ==========================================
+// MONGODB ATLAS - DOIMIY CACHE BAZASI
+// ==========================================
+const MONGODB_URI = process.env.MONGODB_URI;
+let audioCacheCollection = null;
+
+async function initMongoCache() {
+  if (!MONGODB_URI) {
+    console.log("⚠️ MONGODB_URI topilmadi — faqat lokal fayl cache ishlatiladi (server qayta ishga tushsa yo'qoladi).");
+    return;
+  }
+  try {
+    const client = new MongoClient(MONGODB_URI);
+    await client.connect();
+    const db = client.db('telegram_bot');
+    audioCacheCollection = db.collection('audio_cache');
+
+    // Mongo'dagi mavjud yozuvlarni xotiraga yuklaymiz (lokal fayldan ustun turadi)
+    const docs = await audioCacheCollection.find({}).toArray();
+    docs.forEach((doc) => {
+      AUDIO_CACHE[doc._id] = doc.file_id;
+    });
+    saveAudioCache();
+    console.log(`🗄️ MongoDB Atlas'ga ulandi. ${docs.length} ta audio keshi yuklandi.`);
+  } catch (err) {
+    console.error("❌ MongoDB Atlas'ga ulanishda xatolik:", err.message);
+    audioCacheCollection = null;
+  }
+}
+initMongoCache();
+
+// Har bir cache yozuvini xotira + lokal fayl + MongoDB Atlas'ga birdek yozadi
+async function setAudioCache(key, fileId) {
+  if (!key) return;
+  AUDIO_CACHE[key] = fileId;
+  saveAudioCache();
+  if (audioCacheCollection) {
+    try {
+      await audioCacheCollection.updateOne(
+        { _id: key },
+        { $set: { file_id: fileId, updatedAt: new Date() } },
+        { upsert: true }
+      );
+    } catch (e) {
+      console.error("❌ MongoDB'ga yozishda xatolik:", e.message);
+    }
+  }
+}
+
+// Yaroqsiz bo'lib qolgan cache yozuvini hamma joydan o'chiradi
+async function deleteAudioCache(key) {
+  if (!key) return;
+  delete AUDIO_CACHE[key];
+  saveAudioCache();
+  if (audioCacheCollection) {
+    try {
+      await audioCacheCollection.deleteOne({ _id: key });
+    } catch (e) {
+      console.error("❌ MongoDB'dan o'chirishda xatolik:", e.message);
+    }
+  }
+}
+
 const STORAGE_CHAT_ID = '-1004290504683'; 
 const PENDING_PREFETCH = new Map();
 const URL_REGEX = /(https?:\/\/[^\s]+)/i;
@@ -135,8 +199,53 @@ function detectPlatform(url) {
   return null;
 }
 
-bot.onText(/^\/start/, (msg) => {
+// ==========================================
+// MAJBURIY OBUNA (FORCE SUBSCRIBE)
+// ==========================================
+const FORCE_SUB_CHANNELS = [
+  { username: '@muzikalarmix', url: 'https://t.me/muzikalarmix', title: 'Muzikalar Mix' },
+  { username: '@talimtalaba', url: 'https://t.me/talimtalaba', title: "Ta'lim Talaba" }
+];
+
+async function getUnsubscribedChannels(userId) {
+  const missing = [];
+  for (const ch of FORCE_SUB_CHANNELS) {
+    try {
+      const member = await bot.getChatMember(ch.username, userId);
+      const status = member.status;
+      if (!['member', 'administrator', 'creator'].includes(status)) {
+        missing.push(ch);
+      }
+    } catch (e) {
+      // Bot kanalda a'zo/admin bo'lmasa yoki xatolik yuz bersa, ehtiyot uchun obuna bo'lmagan deb hisoblaymiz
+      missing.push(ch);
+    }
+  }
+  return missing;
+}
+
+async function sendSubscriptionPrompt(chatId, missing) {
+  const buttons = missing.map(ch => ([{ text: `➕ ${ch.title}`, url: ch.url, style: 'primary' }]));
+  buttons.push([{ text: "✅ Obuna bo'ldim", callback_data: 'check_sub', style: 'success' }]);
+
+  return bot.sendMessage(chatId,
+    "⚠️ *Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling:*\n\n" +
+    missing.map(ch => `➕ ${ch.title}`).join('\n') +
+    "\n\nObuna bo'lgach, pastdagi *\"✅ Obuna bo'ldim\"* tugmasini bosing.",
+    { parse_mode: 'Markdown', reply_markup: { inline_keyboard: buttons } }
+  );
+}
+
+bot.onText(/^\/start/, async (msg) => {
   const chatId = msg.chat.id;
+  const userId = msg.from.id;
+
+  const missing = await getUnsubscribedChannels(userId);
+  if (missing.length > 0) {
+    await sendSubscriptionPrompt(chatId, missing);
+    return;
+  }
+
   bot.sendMessage(chatId,
     "Salom! 👋\n\n" +
     "Men Instagram, TikTok va YouTube'dan video va musiqa yuklab beraman, shuningdek kanallaringizga reaksiya yig'ishda yordam beraman.\n\n" +
@@ -182,6 +291,13 @@ bot.on('message', async (msg) => {
   const text = msg.text || '';
 
   if (text.startsWith('/')) return;
+
+  const userId = msg.from.id;
+  const missing = await getUnsubscribedChannels(userId);
+  if (missing.length > 0) {
+    await sendSubscriptionPrompt(chatId, missing);
+    return;
+  }
 
   const match = text.match(URL_REGEX);
   if (match) {
@@ -272,8 +388,7 @@ function prefetchAudio(videoId, title) {
       try {
         const sent = await bot.sendAudio(STORAGE_CHAT_ID, filePath, { title });
         if (sent && sent.audio && sent.audio.file_id) {
-          AUDIO_CACHE[videoId] = sent.audio.file_id;
-          saveAudioCache();
+          await setAudioCache(videoId, sent.audio.file_id);
           resolve(sent.audio.file_id);
         } else {
           resolve(null);
@@ -311,8 +426,7 @@ async function handleDownload(chatId, url, quality) {
       await bot.deleteMessage(chatId, statusMsg.message_id).catch(() => {});
       return;
     } catch (e) {
-      delete AUDIO_CACHE[videoId];
-      saveAudioCache();
+      await deleteAudioCache(videoId);
     }
   }
 
@@ -379,8 +493,7 @@ function runAndSendAudioWithCache(cmd, chatId, statusMessageId, fileId, videoId,
       if (sentToStorage && sentToStorage.audio && sentToStorage.audio.file_id) {
         await bot.sendAudio(chatId, sentToStorage.audio.file_id, { title: songTitle });
         if (videoId) {
-          AUDIO_CACHE[videoId] = sentToStorage.audio.file_id;
-          saveAudioCache();
+          await setAudioCache(videoId, sentToStorage.audio.file_id);
         }
       } else {
         await bot.sendAudio(chatId, filePath, { title: songTitle });
@@ -465,6 +578,31 @@ bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
   const messageId = query.message.message_id;
   const data = query.data || '';
+  const userId = query.from.id;
+
+  if (data === 'check_sub') {
+    const missing = await getUnsubscribedChannels(userId);
+    if (missing.length > 0) {
+      bot.answerCallbackQuery(query.id, { text: "❌ Hali barcha kanallarga obuna bo'lmadingiz.", show_alert: true }).catch(() => {});
+      return;
+    }
+    bot.answerCallbackQuery(query.id, { text: '✅ Obuna tasdiqlandi!' }).catch(() => {});
+    bot.deleteMessage(chatId, messageId).catch(() => {});
+    bot.sendMessage(chatId,
+      "✅ Rahmat! Endi botdan to'liq foydalanishingiz mumkin.\n\n" +
+      "📥 Video/musiqa havolasini yuboring yoki qo'shiq nomini yozing."
+    );
+    return;
+  }
+
+  if (['dl:', 'pick:'].some(prefix => data.startsWith(prefix))) {
+    const missing = await getUnsubscribedChannels(userId);
+    if (missing.length > 0) {
+      bot.answerCallbackQuery(query.id, { text: '⚠️ Avval kanallarga obuna bo\'ling.', show_alert: true }).catch(() => {});
+      await sendSubscriptionPrompt(chatId, missing);
+      return;
+    }
+  }
 
   if (data === 'menu_reactions') {
     bot.answerCallbackQuery(query.id).catch(() => {});
@@ -582,8 +720,7 @@ bot.on('callback_query', async (query) => {
         await bot.deleteMessage(chatId, statusMsg.message_id).catch(() => {});
         return;
       } catch (e) {
-        delete AUDIO_CACHE[chosen.id];
-        saveAudioCache();
+        await deleteAudioCache(chosen.id);
       }
     }
 
@@ -645,8 +782,7 @@ function runAndSendPickAudio(cmd, chatId, statusMessageId, fileId, cacheKey, cac
       if (sentToStorage && sentToStorage.audio && sentToStorage.audio.file_id) {
         await bot.sendAudio(chatId, sentToStorage.audio.file_id, { title: cacheTitle });
         if (cacheKey) {
-          AUDIO_CACHE[cacheKey] = sentToStorage.audio.file_id;
-          saveAudioCache();
+          await setAudioCache(cacheKey, sentToStorage.audio.file_id);
         }
       } else {
         await bot.sendAudio(chatId, filePath, { title: cacheTitle });
