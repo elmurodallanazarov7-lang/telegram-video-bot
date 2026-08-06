@@ -52,7 +52,6 @@ if (REACTION_TOKENS.length > 0) {
     if (!rToken.trim()) return;
     const rBot = new TelegramBot(rToken.trim(), { polling: true });
 
-    // YANGILIK: Bot o'z username'ini topadi va tugmaga qo'yadi
     rBot.getMe().then((botInfo) => {
       const botUsername = botInfo.username;
       
@@ -67,7 +66,6 @@ if (REACTION_TOKENS.length > 0) {
             parse_mode: 'Markdown',
             reply_markup: {
               inline_keyboard: [
-                // To'g'ridan-to'g'ri kanal tanlash va admin qilish tugmasi
                 [{ text: "➕ Kanalga qo'shish", url: `https://t.me/${botUsername}?startchannel=true`, style: 'primary' }]
               ]
             }
@@ -83,7 +81,6 @@ if (REACTION_TOKENS.length > 0) {
       if (processedPosts.has(uniqueId)) return;
       processedPosts.add(uniqueId); 
 
-      // Post topilgach, botlar birin-ketin reaksiya bosadi
       REACTION_TOKENS.forEach((token, i) => {
         setTimeout(async () => {
           const randomEmoji = EMOJIS[Math.floor(Math.random() * EMOJIS.length)];
@@ -98,7 +95,7 @@ if (REACTION_TOKENS.length > 0) {
               })
             });
           } catch (e) {}
-        }, i * 1500); // Har bir bot 1.5 soniya oraliq bilan bosadi (Tabiiy ko'rinishi uchun)
+        }, i * 1500); 
       });
     });
   });
@@ -154,7 +151,7 @@ let videoCacheCollection = null;
 
 async function initMongoCache() {
   if (!MONGODB_URI) {
-    console.log("⚠️ MONGODB_URI topilmadi — faqat lokal fayl cache ishlatiladi (server qayta ishga tushsa yo'qoladi).");
+    console.log("⚠️ MONGODB_URI topilmadi — faqat lokal fayl cache ishlatiladi.");
     return;
   }
   try {
@@ -412,7 +409,8 @@ function getCookiesPath() {
   }
 }
 
-const SPEED_FLAGS = '-4 -N 8 --no-update';
+// TEZLASHTIRILGAN SPEED FLAGS (-N 16 va qo'shimcha optimizatsiyalar)
+const SPEED_FLAGS = '-4 -N 16 --no-check-certificates --prefer-free-formats --no-playlist --no-update';
 
 function buildYtDlpFlags(platform) {
   const cookiesPath = getCookiesPath();
@@ -591,13 +589,14 @@ setInterval(() => {
   }
 }, 10 * 60 * 1000);
 
+// TEZLASHTIRILGAN QIDIRUV (ytsearch5 va 5s timeout)
 async function handleMusicSearch(chatId, query) {
   if (!query || query.length < 2) return;
 
   const statusMsg = await bot.sendMessage(chatId, `🔎 "${query}" qidirilmoqda...`);
 
   const safeQuery = query.replace(/"/g, '');
-  const cmd = `yt-dlp -4 --no-update --extractor-args "youtube:player_client=android" --flat-playlist --skip-download --socket-timeout 8 --print "%(id)s|||%(title)s" "ytsearch10:${safeQuery}"`;
+  const cmd = `yt-dlp -4 --no-update --extractor-args "youtube:player_client=android" --flat-playlist --skip-download --socket-timeout 5 --print "%(id)s|||%(title)s" "ytsearch5:${safeQuery}"`;
 
   exec(cmd, { maxBuffer: 1024 * 1024 * 20 }, async (error, stdout) => {
     if (error || !stdout.trim()) {
