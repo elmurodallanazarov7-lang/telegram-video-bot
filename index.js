@@ -51,24 +51,30 @@ if (REACTION_TOKENS.length > 0) {
     if (!rToken.trim()) return;
     const rBot = new TelegramBot(rToken.trim(), { polling: true });
 
-    // YANGI QO'SHILGAN QISM: Reaksiya botlariga /start bosilganda chiqadigan xabar
-    rBot.onText(/^\/start/, (msg) => {
-      const chatId = msg.chat.id;
-      rBot.sendMessage(chatId,
-        "Salom! 👋\n\n" +
-        "Men kanallarga avtomatik tarzda chiroyli reaksiyalar yig'ib beruvchi yordamchi botman.\n\n" +
-        "⚙️ **Qanday ishlatiladi?**\n" +
-        "Shunchaki meni o'z kanalingizga **Administrator** qilib qo'shing. Shundan so'ng, kanalingizga tashlangan har bir yangi postga avtomatik tarzda reaksiya bosib boraman!",
-        {
-          parse_mode: 'Markdown',
-          reply_markup: {
-            inline_keyboard: [
-              // DIQQAT: Shu yerdagi havola o'rniga o'z kanalingiz havolasini qoyib oling!
-              [{ text: '📢 Asosiy kanalimiz', url: 'https://t.me/SizningKanalingiz' }]
-            ]
+    // YANGILIK: Bot o'z username'ini topadi va tugmaga qo'yadi
+    rBot.getMe().then((botInfo) => {
+      const botUsername = botInfo.username;
+      
+      rBot.onText(/^\/start/, (msg) => {
+        const chatId = msg.chat.id;
+        rBot.sendMessage(chatId,
+          "Salom! 👋\n\n" +
+          "Men kanallarga avtomatik tarzda chiroyli reaksiyalar yig'ib beruvchi yordamchi botman.\n\n" +
+          "⚙️ **Qanday ishlatiladi?**\n" +
+          "Pastdagi tugmani bosing, o'z kanalingizni tanlang va meni **Administrator** qilib qo'shing. Shundan so'ng barcha yangi postlarga reaksiya bosa boshlayman!",
+          {
+            parse_mode: 'Markdown',
+            reply_markup: {
+              inline_keyboard: [
+                // To'g'ridan-to'g'ri kanal tanlash va admin qilish tugmasi
+                [{ text: "➕ Kanalga qo'shish", url: `https://t.me/${botUsername}?startchannel=true` }]
+              ]
+            }
           }
-        }
-      ).catch(() => {});
+        ).catch(() => {});
+      });
+    }).catch((err) => {
+      console.error("Bot ma'lumotlarini olishda xatolik:", err);
     });
 
     rBot.on('channel_post', async (msg) => {
@@ -90,9 +96,7 @@ if (REACTION_TOKENS.length > 0) {
                 reaction: [{ type: 'emoji', emoji: randomEmoji }]
               })
             });
-          } catch (e) {
-            // Agar bot kanalga admin qilinmagan bo'lsa xato beradi, uni e'tiborsiz qoldiramiz
-          }
+          } catch (e) {}
         }, i * 1500); // Har bir bot 1.5 soniya oraliq bilan bosadi (Tabiiy ko'rinishi uchun)
       });
     });
@@ -131,7 +135,6 @@ function detectPlatform(url) {
   return null;
 }
 
-// /start buyrug'i - Bosh sahifa va menyu
 bot.onText(/^\/start/, (msg) => {
   const chatId = msg.chat.id;
   bot.sendMessage(chatId,
