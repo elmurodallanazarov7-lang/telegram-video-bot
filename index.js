@@ -200,12 +200,10 @@ function detectPlatform(url) {
 }
 
 // ==========================================
-// MAJBURIY OBUNA (FORCE SUBSCRIBE)
+// MAJBURIY OBUNA (FORCE SUBSCRIBE) — HOZIRCHA O'CHIRILGAN
+// Qayta yoqish uchun quyidagi ro'yxatga kanallarni qaytaring
 // ==========================================
-const FORCE_SUB_CHANNELS = [
-  { username: '@muzikalarmix', url: 'https://t.me/muzikalarmix', title: 'Muzikalar Mix' },
-  { username: '@talimtalaba', url: 'https://t.me/talimtalaba', title: "Ta'lim Talaba" }
-];
+const FORCE_SUB_CHANNELS = [];
 
 async function getUnsubscribedChannels(userId) {
   const missing = [];
