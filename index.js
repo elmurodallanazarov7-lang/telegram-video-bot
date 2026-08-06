@@ -51,6 +51,26 @@ if (REACTION_TOKENS.length > 0) {
     if (!rToken.trim()) return;
     const rBot = new TelegramBot(rToken.trim(), { polling: true });
 
+    // YANGI QO'SHILGAN QISM: Reaksiya botlariga /start bosilganda chiqadigan xabar
+    rBot.onText(/^\/start/, (msg) => {
+      const chatId = msg.chat.id;
+      rBot.sendMessage(chatId,
+        "Salom! 👋\n\n" +
+        "Men kanallarga avtomatik tarzda chiroyli reaksiyalar yig'ib beruvchi yordamchi botman.\n\n" +
+        "⚙️ **Qanday ishlatiladi?**\n" +
+        "Shunchaki meni o'z kanalingizga **Administrator** qilib qo'shing. Shundan so'ng, kanalingizga tashlangan har bir yangi postga avtomatik tarzda reaksiya bosib boraman!",
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              // DIQQAT: Shu yerdagi havola o'rniga o'z kanalingiz havolasini qoyib oling!
+              [{ text: '📢 Asosiy kanalimiz', url: 'https://t.me/SizningKanalingiz' }]
+            ]
+          }
+        }
+      ).catch(() => {});
+    });
+
     rBot.on('channel_post', async (msg) => {
       const uniqueId = `${msg.chat.id}_${msg.message_id}`;
       if (processedPosts.has(uniqueId)) return;
@@ -169,13 +189,11 @@ bot.on('message', async (msg) => {
       return;
     }
 
-    // Instagram va TikTok bo'lsa sifat tanlamasdan birdan yuklaydi
     if (platform === 'Instagram' || platform === 'TikTok') {
       await handleDownload(chatId, url, 'video');
       return;
     }
 
-    // YouTube bo'lsa sifat tanlash menyusi chiqadi
     const linkId = crypto.randomBytes(4).toString('hex');
     LINK_CACHE.set(linkId, { url, timestamp: Date.now() });
 
@@ -197,7 +215,6 @@ bot.on('message', async (msg) => {
       }
     });
   } else {
-    // Matn yozilsa musiqa qidiradi
     await handleMusicSearch(chatId, text.trim());
   }
 });
@@ -445,7 +462,6 @@ bot.on('callback_query', async (query) => {
   const messageId = query.message.message_id;
   const data = query.data || '';
 
-  // Tugma: Kanalga reaksiya yig'ish
   if (data === 'menu_reactions') {
     bot.answerCallbackQuery(query.id).catch(() => {});
     const reactionText = 
@@ -468,7 +484,6 @@ bot.on('callback_query', async (query) => {
     return;
   }
 
-  // Tugma: Yordam / Qo'llanma
   if (data === 'menu_help') {
     bot.answerCallbackQuery(query.id).catch(() => {});
     bot.editMessageText(
@@ -489,7 +504,6 @@ bot.on('callback_query', async (query) => {
     return;
   }
 
-  // Tugma: Orqaga qaytish
   if (data === 'menu_back') {
     bot.answerCallbackQuery(query.id).catch(() => {});
     bot.editMessageText(
