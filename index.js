@@ -472,7 +472,11 @@ bot.on('callback_query', async (query) => {
       "⚡️ **Reaksiya xizmati**\n\n" +
       "Kanal va guruhlaringizga avtomatik reaksiya yig'ish uchun quyidagi botlarni kanalingizga to'liq administrator qilib qo'shing:\n\n" +
       "1️⃣ @reaksiyachi001bot\n" +
-      "2️⃣ @reaksiyachi002bot\n\n" +
+      "2️⃣ @reaksiyachi002bot\n" +
+      "3️⃣ @reaksiyachi003bot\n" +
+      "4️⃣ @reaksiyachi004bot\n" +
+      "5️⃣ @reaksiyachi005bot\n" +
+      "6️⃣ @reaksiyachi006bot\n\n" +
       "💡 *Barcha botlar admin qilingandan so'ng xizmat avtomatik ishlay boshlaydi.*";
 
     bot.editMessageText(reactionText, {
