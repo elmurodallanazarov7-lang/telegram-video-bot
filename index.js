@@ -67,7 +67,7 @@ if (REACTION_TOKENS.length > 0) {
             reply_markup: {
               inline_keyboard: [
                 // To'g'ridan-to'g'ri kanal tanlash va admin qilish tugmasi
-                [{ text: "➕ Kanalga qo'shish", url: `https://t.me/${botUsername}?startchannel=true` }]
+                [{ text: "➕ Kanalga qo'shish", url: `https://t.me/${botUsername}?startchannel=true`, style: 'primary' }]
               ]
             }
           }
@@ -146,8 +146,8 @@ bot.onText(/^\/start/, (msg) => {
       parse_mode: 'Markdown',
       reply_markup: {
         inline_keyboard: [
-          [{ text: '⚡️ Kanalga reaksiya yig\'ish', callback_data: 'menu_reactions' }],
-          [{ text: '🤖 Yordam / Qo\'llanma', callback_data: 'menu_help' }]
+          [{ text: '⚡️ Kanalga reaksiya yig\'ish', callback_data: 'menu_reactions', style: 'primary' }],
+          [{ text: '🤖 Yordam / Qo\'llanma', callback_data: 'menu_help', style: 'success' }]
         ]
       }
     }
@@ -204,15 +204,15 @@ bot.on('message', async (msg) => {
       reply_markup: {
         inline_keyboard: [
           [
-            { text: 'Video 360p', callback_data: `dl:${linkId}:360` },
-            { text: 'Video 480p', callback_data: `dl:${linkId}:480` }
+            { text: 'Video 360p', callback_data: `dl:${linkId}:360`, style: 'primary' },
+            { text: 'Video 480p', callback_data: `dl:${linkId}:480`, style: 'primary' }
           ],
           [
-            { text: 'Video 720p', callback_data: `dl:${linkId}:720` },
-            { text: 'Video 1080p', callback_data: `dl:${linkId}:1080` }
+            { text: 'Video 720p', callback_data: `dl:${linkId}:720`, style: 'primary' },
+            { text: 'Video 1080p', callback_data: `dl:${linkId}:1080`, style: 'primary' }
           ],
           [
-            { text: 'Audio MP3', callback_data: `dl:${linkId}:audio` }
+            { text: 'Audio MP3', callback_data: `dl:${linkId}:audio`, style: 'success' }
           ]
         ]
       }
@@ -442,7 +442,8 @@ async function handleMusicSearch(chatId, query) {
 
     const buttons = results.map((r, i) => ({
       text: `🎵 ${i + 1}`,
-      callback_data: `pick:${searchId}:${i}`
+      callback_data: `pick:${searchId}:${i}`,
+      style: 'primary'
     }));
     const keyboard = [];
     for (let i = 0; i < buttons.length; i += 5) {
@@ -480,7 +481,7 @@ bot.on('callback_query', async (query) => {
       parse_mode: 'Markdown',
       reply_markup: {
         inline_keyboard: [
-          [{ text: '🔙 Orqaga', callback_data: 'menu_back' }]
+          [{ text: '🔙 Orqaga', callback_data: 'menu_back', style: 'danger' }]
         ]
       }
     }).catch(() => {});
@@ -499,7 +500,7 @@ bot.on('callback_query', async (query) => {
         parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [
-            [{ text: '🔙 Orqaga', callback_data: 'menu_back' }]
+            [{ text: '🔙 Orqaga', callback_data: 'menu_back', style: 'danger' }]
           ]
         }
       }
@@ -520,8 +521,8 @@ bot.on('callback_query', async (query) => {
         parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [
-            [{ text: '⚡️ Kanalga reaksiya yig\'ish', callback_data: 'menu_reactions' }],
-            [{ text: '🤖 Yordam / Qo\'llanma', callback_data: 'menu_help' }]
+            [{ text: '⚡️ Kanalga reaksiya yig\'ish', callback_data: 'menu_reactions', style: 'primary' }],
+            [{ text: '🤖 Yordam / Qo\'llanma', callback_data: 'menu_help', style: 'success' }]
           ]
         }
       }
